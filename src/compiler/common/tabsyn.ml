@@ -9,6 +9,7 @@ include Oper
 type program = Prog of { node: string; decls: decl list; hls: hl list }
 and decl
   = VarDecl of { x: string; ty: T.ty; init: exp; pos: pos }
+  | VarDeclHeap of { x: string; ty: T.ty; init: exp; pos: pos }
   | NetworkChannelDecl of { channel: Ch.channel; level: L.level; potential: int; ty: T.ty; pos: pos }
   | LocalChannelDecl of { ch: string; ty: T.ty; pos: pos }
 and hl
@@ -18,6 +19,7 @@ and varloc = LOCAL | STORE
 and var_base =
   | SimpleVar of string
   | SubscriptVar of { var: var; exp: exp }
+  | HeapVar of { var: var }
 and exp = Exp of { exp_base: exp_base; ty: T.ty; pos: pos }
 and proj
   = Fst
@@ -31,6 +33,8 @@ and exp_base
   | OpExp of { left: exp; oper: oper; right: exp }
   | PairExp of (exp*exp)
   | ArrayExp of exp list
+  | DerefExp of exp
+
 and cmd = Cmd of { cmd_base: cmd_base; pos: pos }
 and cmd_base
   = SkipCmd
@@ -45,3 +49,6 @@ and cmd_base
   | OblivIfCmd of { test: exp; thn: cmd; els: cmd }
   | PopCmd
   | ExitCmd
+  | AllocCmd of { var: var; exp: exp}
+  | WriteCmd of { var: var; exp: exp}
+  | ArrayInCmd of { var: var; idx: exp; exp: exp}

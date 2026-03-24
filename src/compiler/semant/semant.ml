@@ -96,9 +96,9 @@ let checkComparable t1 t2 err pos =
     | b1, b2 -> Err.error err pos @@ "types " ^ Ty.base_to_string b1 ^ " and " ^ Ty.base_to_string b2 ^ " do not match"
   in _check t1 t2
 
-let rec checkAssignable t1 t2 err pos =
-  checkFlowType t1 t2 err pos;
-  match T.base t1, T.base t2 with
+let rec checkAssignable value dest err pos =
+  checkFlowType value dest err pos;
+  match T.base value, T.base dest with
   | T.ERROR, _ -> ()
   | _, T.ERROR -> ()
   | T.INT, T.INT -> ()
@@ -106,8 +106,11 @@ let rec checkAssignable t1 t2 err pos =
   | T.PAIR (a1,a2), T.PAIR (b1,b2) ->
     checkAssignable a1 b1 err pos;
     checkAssignable a2 b2 err pos;
-  | T.ARRAY t1, T.ARRAY t2 ->
-    checkAssignable t1 t2 err pos
+  | T.ARRAY t_value, T.ARRAY t_dest ->
+    if T.base t_value = T.EMPTY_ARRAY then ()
+    else checkAssignable t_value t_dest err pos
+  | T.POINTER t_value, T.POINTER t_dest ->
+    checkAssignable t_value t_dest err pos
   | b1, b2 -> Err.error err pos @@ "cannot assign expression of type " ^ Ty.base_to_string b1 ^ " to variable of type " ^ Ty.base_to_string b2
 
 let checkLowPC pc err pos =
@@ -177,7 +180,8 @@ let rec transExp ({err;_} as ctxt) =
         let _, ty = e_ty @@ transExp ctxt hd in
         ty
       | _ ->
-        errTy err pos "array cannot be empty" in
+        (* P: Check level *)
+        T.Type{base=Ty.EMPTY_ARRAY; level=L.bottom} in
       let f exp =
         let e,ety = e_ty @@ transExp ctxt exp in
         checkBaseType ty ety err pos;
@@ -211,12 +215,28 @@ and transVar ({err;_} as ctxt) =
       | LOCAL -> SubscriptVar{var;exp} ^! t
       | STORE -> SubscriptVar{var;exp} ^@ t
       end
+    | A.HeapVar {var} ->
+      let var, vty, _, loc = v_ty_lvl_loc @@ trvar var in
+      let t = match T.base vty with
+        | T.POINTER t -> t
+        | _ -> errTy err pos @@ "variable is not a pointer type: " ^ T.to_string vty in
+      begin
+      match loc with
+      | LOCAL -> HeapVar{var} ^! t
+      | STORE -> HeapVar{var} ^@ t
+      end
   in trvar
 
 let rec varname (Var{var_base;_}) =
   match var_base with
   | SimpleVar x -> x
   | SubscriptVar{var;_} -> varname var
+  | HeapVar{var} -> "*" ^ varname var
+
+let checkWritable var varloc err pos =
+  match varloc with
+  | LOCAL -> Err.error err pos @@ "handler variable " ^ varname var ^ " is read-only"
+  | STORE -> ()
 
 let transCmd ({err;_} as ctxt) =
   let rec trcmd pc (q: int) (A.Cmd{cmd_base;pos}): cmd * int =
@@ -243,13 +263,7 @@ let transCmd ({err;_} as ctxt) =
     | BindCmd {var;exp} ->
       let var,varty,varloc = v_ty_loc @@ transVar ctxt var in
       let e,ety = e_ty @@ transExp ctxt exp in
-      begin
-        match varloc with
-        | LOCAL ->
-          Err.error err pos @@ "handler variable " ^ varname var ^ " is read-only";
-        | STORE -> 
-          ()
-      end;
+      checkWritable var varloc err pos;
       checkAssignable (raiseTo ety pc) varty err pos;
       fromBase @@ BindCmd{var;exp=e}, q
     | InputCmd {var;ch;size} ->
@@ -318,6 +332,34 @@ let transCmd ({err;_} as ctxt) =
     | ExitCmd -> 
       checkLowPC pc err pos;
       fromBase ExitCmd, q
+   | AllocCmd {var; exp} ->
+      let var, varty, varloc = v_ty_loc @@ transVar ctxt var in
+      let e, ety = e_ty @@ transExp ctxt exp in
+      checkLowPC pc err pos;
+      checkWritable var varloc err pos;
+      let pointee_ty = match T.base varty with
+        | T.POINTER t -> t
+        | _ -> errTy err pos @@ "alloc target must be a pointer type, got: " ^ T.to_string varty in
+      checkAssignable ety pointee_ty err pos;
+      fromBase @@ AllocCmd{var; exp=e}, q
+    | WriteCmd {var=_var; exp=_exp} -> 
+        raise @@  Failure ("WriteCmd: not checked")
+    | ArrayInCmd {var; idx; exp} ->
+        let var, varty, varloc = v_ty_loc @@ transVar ctxt var in
+        let idx, idxty, _idxlvl = e_ty_lvl @@ transExp ctxt idx in
+        let e, ety = e_ty @@ transExp ctxt exp in
+
+        checkLowPC pc err pos;
+        checkInt idxty err pos;
+        (* Check that index is public *)
+        (* checkFlow idxlvl L.bottom err pos; *)
+        checkWritable var varloc err pos;
+        let elt_ty = match T.base varty with
+          | T.ARRAY t -> t
+          | _ -> errTy err pos @@ "variable is not an array type: " ^ T.to_string varty in
+        checkAssignable ety elt_ty err pos;
+        fromBase @@ ArrayInCmd{var; idx; exp=e}, q
+
   in trcmd
 
 let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
@@ -329,6 +371,14 @@ let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
     H.add gamma x ty;
     checkAssignable initty ty err pos;
     VarDecl{x;ty;init;pos}
+  | A.VarDeclHeap {ty;x;init;pos} ->
+    if H.mem gamma x
+    then Err.error err pos @@ "variable " ^ x ^ " already declared";
+    let init, initty = e_ty @@ transExp ctxt init in
+    let ptr_ty = T.Type{base=T.POINTER initty; level=T.level ty} in
+    H.add gamma x ty;
+    checkAssignable ptr_ty ty err pos;
+    VarDeclHeap{x;ty;init;pos}
   | A.NetworkChannelDecl {channel;level;potential;ty;pos} ->
     if H.mem lambda channel
     then Err.error err pos @@ "network channel " ^ Ch.to_string channel ^ " already declared";

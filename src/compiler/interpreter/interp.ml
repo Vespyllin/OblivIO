@@ -27,6 +27,8 @@ type context =
   ; mutable input_buffer: char array
   ; memory: (string, value) H.t
   ; store: (string, value) H.t
+  ; heap: (int, value) H.t
+  ; mutable next_address: int
   ; handlers: (string, handler_info) H.t
   ; trust_map: (C.channel, L.level * Ty.ty) H.t
   ; server: server_info
@@ -312,7 +314,17 @@ let rec readvar ctxt =
       let i = _int @@ eval ctxt exp in
       let lvl = Ty.level ty in
       _V ((i,lvl)::path) var
+    | A.HeapVar {var} ->
+      let ptr = _V path var in
+      let addr = match ptr with
+        | IntVal n -> n
+        | _ -> raise @@ InterpFatal "HeapVar: not a pointer" in
+        (* TODO: P: IMPL ERR HANDLING *)
+      lookup ctxt.heap addr
 in _V []
+
+
+(* let rec readloc ctxt = () *)
 
 and writevar ctxt updkind upd mode =
   let rec _V path (A.Var{var_base;_}) = match var_base with
@@ -371,6 +383,11 @@ and writevar ctxt updkind upd mode =
       let i = _int @@ eval ctxt exp in
       let lvl = Ty.level ty in
       _V ((i,lvl)::path) var
+    | A.HeapVar {var} ->
+      let addr = _int @@ readvar ctxt var in
+      (* TODO: P: IMPL NORM/OBLIV HEAP WRITES *)
+      H.replace ctxt.heap addr upd
+      
 in _V []
 
 and eval ctxt =
@@ -408,6 +425,10 @@ and eval ctxt =
         arr |> List.map _E
             |> Array.of_list  in
       ArrayVal {length;data}
+    | A.DerefExp _exp ->
+      (* let loc = _E exp in *)
+      raise @@ Failure "Impl Deref"
+      (* readloc ctxt loc *)
   in _E
 
 exception Exit
@@ -545,6 +566,13 @@ let interpCmd ctxt =
     | ExitCmd ->
       send ctxt (M.Goodbye {sender=ctxt.name});
       raise Exit
+      (* TODO: Work *)
+    | AllocCmd {var=_var; exp=_exp} -> 
+        raise @@ InterpFatal ("AllocCmd: not impl")
+    | WriteCmd {var=_var; exp=_exp} -> 
+        raise @@ InterpFatal ("WriteCmd: not impl")
+    | ArrayInCmd {var=_var; idx=_idx; exp=_exp} -> 
+        raise @@ InterpFatal ("ArrayInCmd: not impl")
       in
   _I
 
@@ -604,6 +632,8 @@ let interp ?(unsafe=false) print_when print_what (A.Prog{node;decls;hls}) =
     ; input_buffer = Array.make 256 '\000'
     ; memory = H.create 1024
     ; store = H.create 1024
+    ; heap = H.create 1024
+    ; next_address = 0
     ; handlers = H.create 1024
     ; trust_map = H.create 1024
     ; server = {input;output}
@@ -615,6 +645,13 @@ let interp ?(unsafe=false) print_when print_what (A.Prog{node;decls;hls}) =
     | (A.VarDecl{x;init;_}) ->
       let i = eval ctxt init in
       H.add ctxt.store x i
+
+    | (A.VarDeclHeap{x;init;_}) ->
+      let v = eval ctxt init in
+      let addr = ctxt.next_address in
+      H.add ctxt.heap addr v;
+      ctxt.next_address <- ctxt.next_address + 1;
+      H.add ctxt.store x (IntVal addr)
     | (A.LocalChannelDecl _) ->
       ()
     | (A.NetworkChannelDecl{channel;ty;level;_}) ->

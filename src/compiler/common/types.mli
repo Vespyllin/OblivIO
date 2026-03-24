@@ -6,6 +6,8 @@ type basetype =
   | STRING
   | PAIR of ty * ty
   | ARRAY of ty
+  | EMPTY_ARRAY
+  | POINTER of ty
   | ERROR
 
 and ty = Type of {base: basetype; level: L.level}

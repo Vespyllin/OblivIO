@@ -18,6 +18,8 @@
 %token AND OR ASSIGN BIND IF THEN ELSE WHILE DO
 %token SKIP OBLIF SEND INPUT OUTPUT
 %token INTTYPE STRINGTYPE
+%token PTRTYPE
+%token ALLOC
 
 %left OR
 %left AND
@@ -65,6 +67,8 @@ var_base:
 | x=ID { SimpleVar x}
 | var=var exp=brack(exp)
   { SubscriptVar {var;exp} }
+| TIMES var=var
+  { HeapVar {var} }
 
 var:
 | var_base=var_base { Var {var_base; pos=$startpos} }
@@ -114,6 +118,17 @@ cmd_base:
   { SendCmd{channel;exp} }
 | EXIT LPAREN RPAREN SEMICOLON
   { ExitCmd }
+// Alloc
+| var=var ASSIGN ALLOC exp=exp SEMICOLON
+  { AllocCmd {var;exp} }
+| var=var ASSIGN BIND exp=exp SEMICOLON
+  { AllocCmd {var;exp} }
+// // Heap Write
+// | TIMES var=var BIND exp=exp SEMICOLON
+//   { WriteCmd {var;exp} }
+// Array Write
+// | var=var LBRACK idx=exp RBRACK BIND exp=exp SEMICOLON
+//   { ArrayInCmd {var;idx;exp} }
 
 cmd_seq:
 | c=cmd_base_seq
@@ -134,6 +149,8 @@ basetype:
   { T.PAIR (t1,t2) }
 | t=type_at_lvl LBRACK RBRACK
   { T.ARRAY t }
+| PTRTYPE LPAREN t=type_at_lvl RPAREN
+  { T.POINTER t }
 
 %inline type_at_lvl:
 | base=basetype AT level=lvl  { T.Type{base;level} }
@@ -154,6 +171,8 @@ potential:
 decl:
 | VAR x=ID ty=type_anno ASSIGN init=exp SEMICOLON
   { VarDecl {ty; x; init; pos=$startpos} }
+| VAR x=ID ty=type_anno ASSIGN ALLOC init=exp SEMICOLON
+  { VarDeclHeap {ty; x; init; pos=$startpos} }
 | NETWORK CHANNEL channel=channel AT level=lvl potential=potential ty=type_anno SEMICOLON
   { NetworkChannelDecl {ty; level; channel; potential; pos=$startpos(channel)} }
 | LOCAL CHANNEL ch=ID ty=type_anno SEMICOLON

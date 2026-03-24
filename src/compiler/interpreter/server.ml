@@ -33,6 +33,8 @@ let start json_file =
     |> List.map to_string 
     |> Common.Level.of_list in
 
+    
+
   let clients = json 
     |> member "clients" 
     |> to_list 
@@ -71,11 +73,12 @@ let start json_file =
   let conn_main s = 
     let in_channel = Unix.in_channel_of_descr s in
     let out_channel = Unix.out_channel_of_descr s in
-    
+    let sender_ref = ref None in
     let rec loop () =
       begin
       match input_value in_channel with
       | M.Greet {sender} when ST.mem sender !clients ->
+        sender_ref := Some sender;
         clients := ST.remove sender !clients;
         print_endline @@ sender ^ " connected...";
         H.add routing_table sender out_channel;
@@ -101,12 +104,13 @@ let start json_file =
           print_endline @@ "Awaiting clients: " ^ 
             String.concat ", " (!clients |> ST.to_seq |> List.of_seq);
         )
-      | M.Goodbye {sender} ->
+     | M.Goodbye {sender} ->
         print_endline @@ sender ^ " disconnected...";
         H.remove routing_table sender;
-        if (H.length routing_table == 0)
-        then exit 0
-      | M.Relay {channel=C.Ch{node;_};_} as msg ->
+        if (H.length routing_table == 0) then 
+          print_endline "All clients disconnected, restarting...";
+        
+  | M.Relay {channel=C.Ch{node;_};_} as msg ->
         let msgstr = M.to_string ~ladv:advlevel msg ^ "\n" in
         log msgstr;
         match H.find_opt routing_table node with
@@ -116,7 +120,16 @@ let start json_file =
         | None -> ()
       end;
       loop () in
-    loop () in
+    match loop () with
+    | () -> ()
+    | exception End_of_file ->
+      begin match !sender_ref with
+      | Some sender ->
+        print_endline @@ sender ^ " disconnected unexpectedly, allowing reconnect...";
+        H.remove routing_table sender;
+        clients := ST.add sender !clients
+      | None -> ()
+      end in
   
   let _ = Thread.create logger () in
 

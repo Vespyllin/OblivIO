@@ -1,0 +1,13 @@
+TEST
+
+local channel STDOUT: string@{H};
+
+var point1: ptr(string@{H})@{H} = alloc "1";
+var point2: ptr(string@{H})@{H} = alloc "2";
+
+START@{} (ignored: int@{}) {
+    *point2 = "22";
+    output(STDOUT, *point1);
+    output(STDOUT, *point2);
+    exit();
+}
