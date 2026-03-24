@@ -123,12 +123,6 @@ cmd_base:
   { AllocCmd {var;exp} }
 | var=var ASSIGN BIND exp=exp SEMICOLON
   { AllocCmd {var;exp} }
-// // Heap Write
-// | TIMES var=var BIND exp=exp SEMICOLON
-//   { WriteCmd {var;exp} }
-// Array Write
-// | var=var LBRACK idx=exp RBRACK BIND exp=exp SEMICOLON
-//   { ArrayInCmd {var;idx;exp} }
 
 cmd_seq:
 | c=cmd_base_seq

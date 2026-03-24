@@ -6,8 +6,9 @@ var point1: ptr(string@{H})@{H} = alloc "1";
 var point2: ptr(string@{H})@{H} = alloc "2";
 
 START@{} (ignored: int@{}) {
-    *point2 = "22";
-    output(STDOUT, *point1);
-    output(STDOUT, *point2);
+    *point1 = "1" ^ *point1 ;
+    point2 = alloc "22";
+    output(STDOUT, *point1 ^ *point2);
+    
     exit();
 }

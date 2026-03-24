@@ -425,10 +425,6 @@ and eval ctxt =
         arr |> List.map _E
             |> Array.of_list  in
       ArrayVal {length;data}
-    | A.DerefExp _exp ->
-      (* let loc = _E exp in *)
-      raise @@ Failure "Impl Deref"
-      (* readloc ctxt loc *)
   in _E
 
 exception Exit
@@ -563,16 +559,19 @@ let interpCmd ctxt =
       | [] -> raise @@ InterpFatal ("PopCmd: stack empty")
       | _ :: bitstack' -> bitstack'
       end
+      (* P: ADD OBLIV VERSION *)
+    | AllocCmd {var; exp} ->
+      if bit = 1 then (
+        let v = eval ctxt exp in
+        let addr = ctxt.next_address in
+        H.add ctxt.heap addr v;
+        ctxt.next_address <- ctxt.next_address + 1;
+        writevar ctxt ASSIGN (IntVal addr) 1 var
+      );
+      bitstack
     | ExitCmd ->
       send ctxt (M.Goodbye {sender=ctxt.name});
       raise Exit
-      (* TODO: Work *)
-    | AllocCmd {var=_var; exp=_exp} -> 
-        raise @@ InterpFatal ("AllocCmd: not impl")
-    | WriteCmd {var=_var; exp=_exp} -> 
-        raise @@ InterpFatal ("WriteCmd: not impl")
-    | ArrayInCmd {var=_var; idx=_idx; exp=_exp} -> 
-        raise @@ InterpFatal ("ArrayInCmd: not impl")
       in
   _I
 

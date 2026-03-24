@@ -33,7 +33,6 @@ and exp_base
   | OpExp of { left: exp; oper: oper; right: exp }
   | PairExp of (exp*exp)
   | ArrayExp of exp list
-  | DerefExp of exp
 
 and cmd = Cmd of { cmd_base: cmd_base; pos: pos }
 and cmd_base
@@ -50,5 +49,3 @@ and cmd_base
   | PopCmd
   | ExitCmd
   | AllocCmd of { var: var; exp: exp}
-  | WriteCmd of { var: var; exp: exp}
-  | ArrayInCmd of { var: var; idx: exp; exp: exp}

@@ -342,24 +342,6 @@ let transCmd ({err;_} as ctxt) =
         | _ -> errTy err pos @@ "alloc target must be a pointer type, got: " ^ T.to_string varty in
       checkAssignable ety pointee_ty err pos;
       fromBase @@ AllocCmd{var; exp=e}, q
-    | WriteCmd {var=_var; exp=_exp} -> 
-        raise @@  Failure ("WriteCmd: not checked")
-    | ArrayInCmd {var; idx; exp} ->
-        let var, varty, varloc = v_ty_loc @@ transVar ctxt var in
-        let idx, idxty, _idxlvl = e_ty_lvl @@ transExp ctxt idx in
-        let e, ety = e_ty @@ transExp ctxt exp in
-
-        checkLowPC pc err pos;
-        checkInt idxty err pos;
-        (* Check that index is public *)
-        (* checkFlow idxlvl L.bottom err pos; *)
-        checkWritable var varloc err pos;
-        let elt_ty = match T.base varty with
-          | T.ARRAY t -> t
-          | _ -> errTy err pos @@ "variable is not an array type: " ^ T.to_string varty in
-        checkAssignable ety elt_ty err pos;
-        fromBase @@ ArrayInCmd{var; idx; exp=e}, q
-
   in trcmd
 
 let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
