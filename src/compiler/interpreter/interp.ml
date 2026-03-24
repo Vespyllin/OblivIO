@@ -559,8 +559,17 @@ let interpCmd ctxt =
       | [] -> raise @@ InterpFatal ("PopCmd: stack empty")
       | _ :: bitstack' -> bitstack'
       end
-      (* P: ADD OBLIV VERSION *)
     | AllocCmd {var; exp} ->
+      if bit = 1 then (
+        let v = eval ctxt exp in
+        let addr = ctxt.next_address in
+        H.add ctxt.heap addr v;
+        ctxt.next_address <- ctxt.next_address + 1;
+        writevar ctxt ASSIGN (IntVal addr) 1 var
+      );
+      bitstack
+    (* P: ADD OBLIV LOGIC *)
+    | OblivAllocCmd {var; exp} ->
       if bit = 1 then (
         let v = eval ctxt exp in
         let addr = ctxt.next_address in

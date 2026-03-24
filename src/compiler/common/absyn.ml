@@ -46,4 +46,6 @@ and cmd_base
   | OblivIfCmd of { test: exp; thn: cmd; els: cmd }
   | ExitCmd
   | AllocCmd of {var: var; exp: exp}
+  | OblivAllocCmd of { var: var; exp: exp}
+
  

@@ -16,5 +16,5 @@ type 'a lvlmap = 'a SS.t
 
 let empty = SS.empty
 let enter (t, k, v) = SS.add k v t
-let look (t, k ) = SS.find_opt k t
+let look (t, k) = SS.find_opt k t
 let numItems = SS.cardinal

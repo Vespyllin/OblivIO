@@ -49,3 +49,4 @@ and cmd_base
   | PopCmd
   | ExitCmd
   | AllocCmd of { var: var; exp: exp}
+  | OblivAllocCmd of { var: var; exp: exp}

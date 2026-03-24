@@ -122,7 +122,7 @@ cmd_base:
 | var=var ASSIGN ALLOC exp=exp SEMICOLON
   { AllocCmd {var;exp} }
 | var=var ASSIGN BIND exp=exp SEMICOLON
-  { AllocCmd {var;exp} }
+  { OblivAllocCmd {var;exp} }
 
 cmd_seq:
 | c=cmd_base_seq
