@@ -1,10 +1,12 @@
 TEST
 
-local channel STDOUT: string@{H};
+local channel STDOUT: string@{};
 
-var point1: ptr(string@{H})@{} = alloc "1";
+var point1: ptr(string@{})@{} = alloc "1";
+var a: string@{}[]@{} = ["A"; "B"];
 
 START@{} (ignored: int@{}) {
+    point1 ?= alloc a[100] ;
     output(STDOUT, *point1);
     
     exit();

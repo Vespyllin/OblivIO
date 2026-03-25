@@ -2,7 +2,7 @@ type oper
   = PlusOp | MinusOp | TimesOp
   | EqOp | NeqOp | LtOp | LeOp | GtOp | GeOp 
   | AndOp | OrOp
-  | CaretOp
+  | CaretOp | CoalesceOp
 
   let to_string = function
     | PlusOp -> "+"
@@ -17,3 +17,4 @@ type oper
     | AndOp -> "and"
     | OrOp -> "or"
     | CaretOp -> "^"
+    | CoalesceOp -> "??"

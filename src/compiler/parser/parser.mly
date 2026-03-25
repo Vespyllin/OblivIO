@@ -20,9 +20,11 @@
 %token INTTYPE STRINGTYPE
 %token PTRTYPE
 %token ALLOC
+%token COALESCE
 
 %left OR
 %left AND
+%left COALESCE
 %nonassoc EQ NEQ GT LT GE LE
 %left CARET
 %left PLUS MINUS
@@ -41,18 +43,19 @@
 
 (* binop *)
 %inline op:
-| PLUS    { PlusOp }
-| MINUS   { MinusOp }
-| TIMES   { TimesOp }
-| AND     { AndOp }
-| OR      { OrOp }
-| EQ      { EqOp }
-| NEQ     { NeqOp }
-| LT      { LtOp }
-| LE      { LeOp }
-| GT      { GtOp }
-| GE      { GeOp }
-| CARET   { CaretOp }
+| PLUS      { PlusOp }
+| MINUS     { MinusOp }
+| TIMES     { TimesOp }
+| AND       { AndOp }
+| OR        { OrOp }
+| EQ        { EqOp }
+| NEQ       { NeqOp }
+| LT        { LtOp }
+| LE        { LeOp }
+| GT        { GtOp }
+| GE        { GeOp }
+| CARET     { CaretOp }
+| COALESCE  { CoalesceOp }
 
 binop_exp:
 | MINUS right=exp %prec UMINUS
@@ -121,7 +124,7 @@ cmd_base:
 // Alloc
 | var=var ASSIGN ALLOC exp=exp SEMICOLON
   { AllocCmd {var;exp} }
-| var=var ASSIGN BIND exp=exp SEMICOLON
+| var=var BIND ALLOC  exp=exp SEMICOLON
   { OblivAllocCmd {var;exp} }
 
 cmd_seq:

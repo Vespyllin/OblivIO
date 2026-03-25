@@ -187,6 +187,7 @@ let rec safeSelect (bit: int) (orig: value) (upd: value) =
     | PairVal (a1,a2), PairVal (b1,b2) ->
       PairVal (_S a1 b1, _S a2 b2)
     | ArrayVal{length=l1;data=d1}, ArrayVal{length=l2;data=d2} ->
+      (* P: Check if this is the correct implementation *)
       begin
         match Array.length d1, Array.length d2 with
         | arrlen1, arrlen2 when arrlen1 <= arrlen2 ->
@@ -240,6 +241,14 @@ let op oper v1 v2 =
   (* STRING *)
   | CaretOp, StringVal {length=l1;data=d1}, StringVal {length=l2;data=d2} ->
     StringVal {length=l1+l2; data=safeConcat l1 d1 d2}
+  (* P: Coalesce *)
+  | CoalesceOp, NullVal {length=l1;_}, b ->
+    begin match b with
+    | StringVal{length=l2;data} -> StringVal{length=max l1 l2; data}
+    | ArrayVal{length=l2;data} -> ArrayVal{length=max l1 l2; data}
+    | _ -> b
+  end
+  | CoalesceOp, a, _ -> a
   | _ -> raise @@ NotImplemented (V.to_string v1 ^ to_string oper ^ V.to_string v2)
 
 let op_unsafe oper v1 v2 =
@@ -283,32 +292,34 @@ let rec readvar ctxt =
         match loc with
         | LOCAL -> lookup ctxt.memory x
         | STORE -> lookup ctxt.store x in
-      let rec f path v =
-        match path, v with
+      let rec unwrap_indices idx_path v =
+        match idx_path, v with
         | [], _ -> v
-        | (i,lvl)::tl, ArrayVal{length;data} ->
-          let maxidx = length -1 in
-          let cnd1 = Bool.to_int(i >= 0) in
-          let cnd2 = Bool.to_int(i > maxidx) in
-          let idx = cnd1 * i in
-          let idx = ((cnd2 lxor 1) * idx) lor (cnd2 * maxidx) in
-          let res =
-            if L.flows_to lvl L.bottom || ctxt.unsafe
-            then f tl data.(idx) (* public index, no problem! *)
-            else 
-              (* non-public index, must obliv everything! *)
-              let len = Array.length data - 1 in
-              let res = f tl data.(0) in
-              let a = ref res in
-              for i = 0 to len do
-                let b = f tl data.(i) in
-                a := safeSelect (Bool.to_int (i lxor idx = 0)) !a b
-              done;
-              !a in 
+      | (idx,lvl)::idx_tl, ArrayVal{length;data} ->
+  let maxidx = length - 1 in
+  let cnd1 = Bool.to_int(idx >= 0) in
+  let cnd2 = Bool.to_int(idx > maxidx) in
+  let idx = cnd1 * idx in
+  let idx = ((cnd2 lxor 1) * idx) lor (cnd2 * maxidx) in
+  let res =
+    if L.flows_to lvl L.bottom || ctxt.unsafe
+      then if idx > maxidx then
+        unwrap_indices idx_tl data.(idx)
+      else (NullVal{length=0; data=[||]})
+    else 
+      (* P: Assuming length is public, do we need to iterate if we have equal sizing? *)
+      let len = Array.length data - 1 in
+      let res = unwrap_indices idx_tl data.(0) in
+      let a = ref res in
+      for i = 0 to len do
+        let b = unwrap_indices idx_tl data.(i) in
+        a := safeSelect (Bool.to_int (i lxor idx = 0)) !a b
+      done;
+      safeSelect cnd2 !a (NullVal{length=0; data=[||]}) in
           res
         | _ -> raise @@ InterpFatal "readVar"
         in
-      f path v
+      unwrap_indices path v
     | A.SubscriptVar {var;exp} ->
       let A.Exp{ty;_} = exp in
       let i = _int @@ eval ctxt exp in
@@ -319,8 +330,9 @@ let rec readvar ctxt =
       let addr = match ptr with
         | IntVal n -> n
         | _ -> raise @@ InterpFatal "HeapVar: not a pointer" in
-        (* TODO: P: IMPL ERR HANDLING *)
-      lookup ctxt.heap addr
+      match H.find_opt ctxt.heap addr with
+        | Some v -> v
+        | None -> raise @@ InterpFatal ("could not find pointer in heap")
 in _V []
 
 
@@ -338,7 +350,8 @@ and writevar ctxt updkind upd mode =
           | BIND, false ->
             let orig = lookup ctxt.store x in
             H.add ctxt.store x @@ safeSelect mode orig upd
-          | _ -> if mode = 1 then H.add ctxt.store x upd
+          | _ -> if mode = 1 then 
+            H.add ctxt.store x upd
           end
         | [(i,lvl)], ArrayVal{length;data} ->
           let maxidx = length -1 in
@@ -568,15 +581,13 @@ let interpCmd ctxt =
         writevar ctxt ASSIGN (IntVal addr) 1 var
       );
       bitstack
-    (* P: ADD OBLIV LOGIC *)
+    (* P: Test *)
     | OblivAllocCmd {var; exp} ->
-      if bit = 1 then (
-        let v = eval ctxt exp in
-        let addr = ctxt.next_address in
-        H.add ctxt.heap addr v;
-        ctxt.next_address <- ctxt.next_address + 1;
-        writevar ctxt ASSIGN (IntVal addr) 1 var
-      );
+      let v = eval ctxt exp in
+      let addr = ctxt.next_address in
+      H.add ctxt.heap addr v;
+      ctxt.next_address <- ctxt.next_address + 1;
+      writevar ctxt BIND (IntVal addr) bit var;
       bitstack
     | ExitCmd ->
       send ctxt (M.Goodbye {sender=ctxt.name});
