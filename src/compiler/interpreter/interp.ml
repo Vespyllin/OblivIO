@@ -115,7 +115,7 @@ let rec safeEq v1 v2 =
     Bool.to_int (!mismatch = 0)
   | PairVal(a1,a2), PairVal (b1,b2) ->
     safeEq a1 b1 * safeEq a2 b2
-  | ArrayVal{length=l1;data=d1}, ArrayVal{length=l2;data=d2} ->
+  | ArrayVal{length=l1;data=d1;_}, ArrayVal{length=l2;data=d2;_} ->
     let mismatch = ref (l1 lxor l2) in
     let publen = min (Array.length d1) (Array.length d2) in
     let seclen = min l1 l2 in
@@ -144,7 +144,7 @@ let rec unsafeEq v1 v2 =
     end
   | PairVal(a1,a2), PairVal (b1,b2) ->
     unsafeEq a1 b1 * safeEq a2 b2
-  | ArrayVal{length=l1;data=d1}, ArrayVal{length=l2;data=d2} ->
+  | ArrayVal{length=l1;data=d1;_}, ArrayVal{length=l2;data=d2;_} ->
     begin
     try
       if l1 <> l2 then raise Unequal;
@@ -186,7 +186,7 @@ let rec safeSelect (bit: int) (orig: value) (upd: value) =
       end
     | PairVal (a1,a2), PairVal (b1,b2) ->
       PairVal (_S a1 b1, _S a2 b2)
-    | ArrayVal{length=l1;data=d1}, ArrayVal{length=l2;data=d2} ->
+    | ArrayVal{length=l1;data=d1;elem_size=es1}, ArrayVal{length=l2;data=d2;elem_size=es2} ->
       (* P: Check if this is the correct implementation *)
       begin
         match Array.length d1, Array.length d2 with
@@ -196,14 +196,14 @@ let rec safeSelect (bit: int) (orig: value) (upd: value) =
           for i = 0 to arrlen1-1 do
             data.(i) <- _S d1.(i) d2.(i)
           done;
-          ArrayVal{length;data}
+          ArrayVal{length;data;elem_size=(max es1 es2)}
         | _, arrlen2 ->
           let length = ((1 lxor bit)*l1) lor (bit*l2) in
           let data = Array.copy d1 in
           for i = 0 to arrlen2-1 do
             data.(i) <- safeSelect bit d1.(i) d2.(i)
           done;
-          ArrayVal{length;data}
+          ArrayVal{length;data; elem_size=(max es1 es2)}
       end
     | _ -> raise @@ InterpFatal ("safeSelect: " ^ (V.to_string orig) ^  ", " ^ (V.to_string upd)) in
   _S orig upd
@@ -245,7 +245,7 @@ let op oper v1 v2 =
   | CoalesceOp, NullVal {length=l1;_}, b ->
     begin match b with
     | StringVal{length=l2;data} -> StringVal{length=max l1 l2; data}
-    | ArrayVal{length=l2;data} -> ArrayVal{length=max l1 l2; data}
+    | ArrayVal{length=l2;data;elem_size} -> ArrayVal{length=max l1 l2; data;elem_size}
     | _ -> b
   end
   | CoalesceOp, a, _ -> a
@@ -295,7 +295,7 @@ let rec readvar ctxt =
       let rec unwrap_indices idx_path v =
         match idx_path, v with
         | [], _ -> v
-      | (idx,lvl)::idx_tl, ArrayVal{length;data} ->
+      | (idx,lvl)::idx_tl, ArrayVal{length;data;_} ->
   let maxidx = length - 1 in
   let cnd1 = Bool.to_int(idx >= 0) in
   let cnd2 = Bool.to_int(idx > maxidx) in
@@ -353,7 +353,7 @@ and writevar ctxt updkind upd mode =
           | _ -> if mode = 1 then 
             H.add ctxt.store x upd
           end
-        | [(i,lvl)], ArrayVal{length;data} ->
+        | [(i,lvl)], ArrayVal{length;data;_} ->
           let maxidx = length -1 in
           let cnd1 = Bool.to_int(i >= 0) in
           let cnd2 = Bool.to_int(i > maxidx) in
@@ -373,7 +373,7 @@ and writevar ctxt updkind upd mode =
               let right_index = Bool.to_int (i lxor idx = 0) in
               data.(i) <- safeSelect (right_index land mode) data.(i) upd
             done          
-        | (i,lvl)::tl, ArrayVal{length;data} ->
+        | (i,lvl)::tl, ArrayVal{length;data;_} ->
           let maxidx = length -1 in
           let cnd1 = Bool.to_int(i >= 0) in
           let cnd2 = Bool.to_int(i > maxidx) in
@@ -432,12 +432,18 @@ and eval ctxt =
       else op oper v1 v2
     | A.PairExp (a,b) ->
       PairVal (_E a,_E b)
-    | ArrayExp arr ->
+    | ArrayExp {data=arr; elem_size;_} ->
+      let max_size = _int @@ _E elem_size in
       let length = List.length arr in
       let data =
-        arr |> List.map _E
-            |> Array.of_list  in
-      ArrayVal {length;data}
+        arr |> List.map (fun e ->
+          let v = _E e in
+          if V.size v > max_size
+          then raise @@ InterpFatal "element exceeds array max element size";
+          v)
+          (* P: Pad v to be of size elem_size *)
+        |> Array.of_list in
+      ArrayVal {length;data;elem_size=max_size}
   in _E
 
 exception Exit

@@ -3,7 +3,7 @@ type value =
 | IntVal of int
 | StringVal of {length: int; data: char array}
 | PairVal of value * value
-| ArrayVal of {length: int; data: value array}
+| ArrayVal of {length: int; data: value array; elem_size: int}
 | NullVal of {length: int; data: char array}
 
 let rec to_string = function
@@ -17,13 +17,13 @@ let rec to_string = function
     ; to_string b
     ; ")"
     ]
-  | ArrayVal {length;data} ->
+  | ArrayVal {length;data;elem_size} ->
     let datastr =
       data |> Array.to_list
            |> Util.take length
            |> List.map to_string
            |> String.concat ";" in
-    "[" ^ datastr ^ "]"
+    "[" ^ datastr ^ "]" ^ "{"^ string_of_int elem_size ^"}"
   | NullVal {length=_length;data=_data} ->
       "null"
 

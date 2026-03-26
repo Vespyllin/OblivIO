@@ -1,6 +1,5 @@
 (library
-        (name lexer)
-        (libraries parser)
-        )
+ (name lexer)
+ (libraries parser))
 
 (ocamllex lexer)

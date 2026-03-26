@@ -179,7 +179,9 @@ let rec transExp ({err;_} as ctxt) =
       let (b,bty) = e_ty @@ trexp b in
       let base = T.PAIR (aty,bty) in
       PairExp (a,b) ^! T.Type{base;level=L.bottom}
-    | ArrayExp arr ->
+    | ArrayExp {data=arr; elem_size} ->
+      let elem_size, esty = e_ty @@ transExp ctxt elem_size in
+      checkInt esty err pos;
       let ty = match arr with
       | hd::_ ->
         let _, ty = e_ty @@ transExp ctxt hd in
@@ -193,7 +195,7 @@ let rec transExp ({err;_} as ctxt) =
         e in
       let arr = List.map f arr in
       let base = T.ARRAY ty in
-      ArrayExp arr ^! T.Type{base;level=L.bottom}
+      ArrayExp {data=arr; elem_size} ^! T.Type{base;level=L.bottom}
       
   in trexp
 and transVar ({err;_} as ctxt) =

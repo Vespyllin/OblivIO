@@ -31,7 +31,7 @@ and exp_base
   | SizeExp of exp
   | OpExp of { left: exp; oper: oper; right: exp }
   | PairExp of (exp*exp)
-  | ArrayExp of exp list
+  | ArrayExp of {data: exp list; elem_size: exp}
 and cmd = Cmd of { cmd_base: cmd_base; pos: pos }
 and cmd_base
   = SkipCmd

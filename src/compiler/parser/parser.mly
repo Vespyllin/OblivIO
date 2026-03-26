@@ -87,8 +87,8 @@ exp_base:
 | SND exp=exp       { ProjExp {proj=Snd; exp} }
 | pair=paren(spair(exp,COMMA,exp))
   { PairExp pair }
-| arr=brack(slist(SEMICOLON,exp))
-  { ArrayExp arr }
+| arr=brack(slist(SEMICOLON,exp)) elem_size=brace(exp)
+  { ArrayExp {data=arr; elem_size} }
 
 exp:
 | e=exp_base          { Exp {exp_base=e; pos=$startpos} }

@@ -3,7 +3,7 @@ TEST
 local channel STDOUT: string@{};
 
 var point1: ptr(string@{})@{} = alloc "1";
-var a: string@{}[]@{} = ["A"; "B"];
+var a: string@{}[]@{} = ["A"; "B"]{9};
 
 START@{} (ignored: int@{}) {
     point1 ?= alloc a[100] ;

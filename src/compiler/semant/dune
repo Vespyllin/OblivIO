@@ -1,5 +1,3 @@
 (library
-        (name semant)
-        (libraries common)
-        )
-
+ (name semant)
+ (libraries common))
