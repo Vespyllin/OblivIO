@@ -9,7 +9,7 @@ include Oper
 type program = Prog of { node: string; decls: decl list; hls: hl list }
 and decl
   = VarDecl of { x: string; ty: T.ty; init: exp; pos: pos }
-  | VarDeclHeap of { x: string; ty: T.ty; init: exp; pos: pos }
+  | VarDeclHeap of { x: string; ty: T.ty; init: exp; pos: pos; cell_size: exp }
   | NetworkChannelDecl of { channel: Ch.channel; level: L.level; potential: int; ty: T.ty; pos: pos }
   | LocalChannelDecl of { ch: string; ty: T.ty; pos: pos }
 and hl
@@ -48,5 +48,5 @@ and cmd_base
   | OblivIfCmd of { test: exp; thn: cmd; els: cmd }
   | PopCmd
   | ExitCmd
-  | AllocCmd of { var: var; exp: exp}
-  | OblivAllocCmd of { var: var; exp: exp}
+  | AllocCmd of { var: var; exp: exp; cell_size: exp}
+  | OblivAllocCmd of { var: var; exp: exp; cell_size: exp}

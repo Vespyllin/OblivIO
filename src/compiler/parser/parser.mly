@@ -122,10 +122,10 @@ cmd_base:
 | EXIT LPAREN RPAREN SEMICOLON
   { ExitCmd }
 // Alloc
-| var=var ASSIGN ALLOC exp=exp SEMICOLON
-  { AllocCmd {var;exp} }
-| var=var BIND ALLOC  exp=exp SEMICOLON
-  { OblivAllocCmd {var;exp} }
+| var=var ASSIGN ALLOC LPAREN exp=exp COMMA cell_size=exp RPAREN SEMICOLON
+  { AllocCmd {var;exp;cell_size} }
+| var=var BIND ALLOC LPAREN exp=exp COMMA cell_size=exp RPAREN SEMICOLON
+  { OblivAllocCmd {var;exp;cell_size} }
 
 cmd_seq:
 | c=cmd_base_seq
@@ -168,8 +168,8 @@ potential:
 decl:
 | VAR x=ID ty=type_anno ASSIGN init=exp SEMICOLON
   { VarDecl {ty; x; init; pos=$startpos} }
-| VAR x=ID ty=type_anno ASSIGN ALLOC init=exp SEMICOLON
-  { VarDeclHeap {ty; x; init; pos=$startpos} }
+| VAR x=ID ty=type_anno ASSIGN ALLOC LPAREN init=exp COMMA cell_size=exp RPAREN SEMICOLON
+  { VarDeclHeap {ty; x; init; pos=$startpos; cell_size} }
 | NETWORK CHANNEL channel=channel AT level=lvl potential=potential ty=type_anno SEMICOLON
   { NetworkChannelDecl {ty; level; channel; potential; pos=$startpos(channel)} }
 | LOCAL CHANNEL ch=ID ty=type_anno SEMICOLON

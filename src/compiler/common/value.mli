@@ -4,7 +4,8 @@ type value =
   | StringVal of {length: int; data: char array}
   | PairVal of value * value
   | ArrayVal of {length: int; data: value array; elem_size: int}
-  | NullVal of {length: int; data: char array}
+  | PointerVal of {addr: int; cell_size: int}
+  | NullVal of char array
 
 val to_string: value -> string
 

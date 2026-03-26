@@ -339,27 +339,32 @@ let transCmd ({err;_} as ctxt) =
     | ExitCmd -> 
       checkLowPC pc err pos;
       fromBase ExitCmd, q
-    | AllocCmd {var; exp} ->
+    | AllocCmd {var; exp; cell_size} ->
       let var, varty, varloc = v_ty_loc @@ transVar ctxt var in
       let e, ety = e_ty @@ transExp ctxt exp in
+      let cs, csty = e_ty @@ transExp ctxt cell_size in
+
+      checkInt csty err pos;
       checkLowPC pc err pos;
       checkWritable var varloc err pos;
       let pointee_ty = match T.base varty with
         | T.POINTER t -> t
         | _ -> errTy err pos @@ "alloc target must be a pointer type, got: " ^ T.to_string varty in
       checkAssignable ety pointee_ty err pos;
-      fromBase @@ AllocCmd{var; exp=e}, q
-    | OblivAllocCmd {var; exp} ->
+      fromBase @@ AllocCmd{var; exp=e; cell_size=cs}, q
+    | OblivAllocCmd {var; exp; cell_size} ->
       let var, varty, varloc = v_ty_loc @@ transVar ctxt var in
       let e, ety = e_ty @@ transExp ctxt exp in
-      
+      let cs, csty = e_ty @@ transExp ctxt cell_size in
+
+      checkInt csty err pos;
       checkWritable var varloc err pos;
       let pointee_ty = match T.base varty with
         | T.POINTER t -> t
         | _ -> errTy err pos @@ "alloc target must be a pointer type, got: " ^ T.to_string varty in
 
       checkAssignable ety pointee_ty err pos;
-      fromBase @@ OblivAllocCmd{var; exp=e}, q
+      fromBase @@ OblivAllocCmd{var; exp=e; cell_size=cs}, q
   in trcmd
 
 let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
@@ -371,7 +376,7 @@ let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
     H.add gamma x ty;
     checkAssignable initty ty err pos;
     VarDecl{x;ty;init;pos}
-  | A.VarDeclHeap {ty;x;init;pos} ->
+  | A.VarDeclHeap {ty;x;init;pos;cell_size} ->
     let rec checkPtrLevels ptr_ty err pos =
       match T.base ptr_ty with
       | T.POINTER cell ->
@@ -381,6 +386,9 @@ let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
       | _ -> () in
     if H.mem gamma x
     then Err.error err pos @@ "variable " ^ x ^ " already declared";
+    let cs, csty, cslvl = e_ty_lvl @@ transExp ctxt cell_size in
+    checkInt csty err pos;
+    checkFlow cslvl L.bottom err pos;
     let init, initty = e_ty @@ transExp ctxt init in
     let cellty = match T.base ty with
       | T.POINTER t -> t
@@ -388,7 +396,7 @@ let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
     checkPtrLevels ty err pos;
     checkAssignable initty cellty err pos;
     H.add gamma x ty;
-    VarDeclHeap{x;ty;init;pos}
+    VarDeclHeap{x;ty;init;pos;cell_size=cs}
   | A.NetworkChannelDecl {channel;level;potential;ty;pos} ->
     if H.mem lambda channel
     then Err.error err pos @@ "network channel " ^ Ch.to_string channel ^ " already declared";

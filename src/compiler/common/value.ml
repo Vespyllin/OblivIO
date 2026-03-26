@@ -4,7 +4,8 @@ type value =
 | StringVal of {length: int; data: char array}
 | PairVal of value * value
 | ArrayVal of {length: int; data: value array; elem_size: int}
-| NullVal of {length: int; data: char array}
+| PointerVal of {addr: int; cell_size: int}
+| NullVal of char array
 
 let rec to_string = function
   | StringVal {length;data} ->
@@ -24,7 +25,9 @@ let rec to_string = function
            |> List.map to_string
            |> String.concat ";" in
     "[" ^ datastr ^ "]" ^ "{"^ string_of_int elem_size ^"}"
-  | NullVal {length=_length;data=_data} ->
+  | PointerVal {addr;cell_size} ->
+      "ptr(" ^ string_of_int addr ^ ", " ^ string_of_int cell_size ^ ")" 
+  | NullVal _ ->
       "null"
 
 let rec size = function 
@@ -32,4 +35,5 @@ let rec size = function
   | StringVal{data;_} -> 8 + Array.length data
   | PairVal (a,b) -> size a + size b 
   | ArrayVal{data;_} -> 8 + Array.length data
-  | NullVal{data;_} -> 8 + Array.length data
+  | NullVal data -> 8 + Array.length data
+  | PointerVal _ -> 8

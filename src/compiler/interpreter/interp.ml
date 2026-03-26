@@ -242,10 +242,11 @@ let op oper v1 v2 =
   | CaretOp, StringVal {length=l1;data=d1}, StringVal {length=l2;data=d2} ->
     StringVal {length=l1+l2; data=safeConcat l1 d1 d2}
   (* P: Coalesce *)
-  | CoalesceOp, NullVal {length=l1;_}, b ->
+  | CoalesceOp, NullVal _dummy_data, b ->
     begin match b with
-    | StringVal{length=l2;data} -> StringVal{length=max l1 l2; data}
-    | ArrayVal{length=l2;data;elem_size} -> ArrayVal{length=max l1 l2; data;elem_size}
+    (* P: safeSelect data for pading *)
+    | StringVal{length=l2;data} -> StringVal{length=l2; data}
+    | ArrayVal{length=l2;data;elem_size} -> ArrayVal{length=l2;data;elem_size}
     | _ -> b
   end
   | CoalesceOp, a, _ -> a
@@ -295,28 +296,32 @@ let rec readvar ctxt =
       let rec unwrap_indices idx_path v =
         match idx_path, v with
         | [], _ -> v
-      | (idx,lvl)::idx_tl, ArrayVal{length;data;_} ->
-  let maxidx = length - 1 in
-  let cnd1 = Bool.to_int(idx >= 0) in
-  let cnd2 = Bool.to_int(idx > maxidx) in
-  let idx = cnd1 * idx in
-  let idx = ((cnd2 lxor 1) * idx) lor (cnd2 * maxidx) in
-  let res =
-    if L.flows_to lvl L.bottom || ctxt.unsafe
-      then if idx > maxidx then
-        unwrap_indices idx_tl data.(idx)
-      else (NullVal{length=0; data=[||]})
-    else 
-      (* P: Assuming length is public, do we need to iterate if we have equal sizing? *)
-      let len = Array.length data - 1 in
-      let res = unwrap_indices idx_tl data.(0) in
-      let a = ref res in
-      for i = 0 to len do
-        let b = unwrap_indices idx_tl data.(i) in
-        a := safeSelect (Bool.to_int (i lxor idx = 0)) !a b
-      done;
-      safeSelect cnd2 !a (NullVal{length=0; data=[||]}) in
-          res
+        | (idx,lvl)::idx_tl, ArrayVal{length;data;_} ->
+          let null = (NullVal [||]) in
+          let maxidx = length - 1 in
+          let cnd1 = Bool.to_int(idx >= 0) in
+          let cnd2 = Bool.to_int(idx > maxidx) in
+          let idx = cnd1 * idx in
+          let idx = ((cnd2 lxor 1) * idx) lor (cnd2 * maxidx) in
+          let res =
+            if L.flows_to lvl L.bottom || ctxt.unsafe
+              then if idx > maxidx then
+                (* P: Pad null data *)
+                NullVal [||]
+              else
+                unwrap_indices idx_tl data.(idx)
+            else 
+              (* P: Assuming length is public, do we need to iterate if we have equal sizing? *)
+              let len = Array.length data - 1 in
+              let res = unwrap_indices idx_tl data.(0) in
+              let a = ref res in
+              for i = 0 to len do
+                let b = unwrap_indices idx_tl data.(i) in
+                a := safeSelect (Bool.to_int (i lxor idx = 0)) !a b
+              done;
+              if cnd2 = 1 then null
+              else !a in  
+            res
         | _ -> raise @@ InterpFatal "readVar"
         in
       unwrap_indices path v
@@ -328,7 +333,7 @@ let rec readvar ctxt =
     | A.HeapVar {var} ->
       let ptr = _V path var in
       let addr = match ptr with
-        | IntVal n -> n
+        | PointerVal{addr; _} -> addr
         | _ -> raise @@ InterpFatal "HeapVar: not a pointer" in
       match H.find_opt ctxt.heap addr with
         | Some v -> v
@@ -353,8 +358,11 @@ and writevar ctxt updkind upd mode =
           | _ -> if mode = 1 then 
             H.add ctxt.store x upd
           end
-        | [(i,lvl)], ArrayVal{length;data;_} ->
+        | [(i,lvl)], ArrayVal{length;data;elem_size} ->
           let maxidx = length -1 in
+          if V.size upd > elem_size || i > maxidx
+          then raise @@ InterpFatal "assigning oversized value into array"
+          else
           let cnd1 = Bool.to_int(i >= 0) in
           let cnd2 = Bool.to_int(i > maxidx) in
           let idx = cnd1 * i in
@@ -397,8 +405,12 @@ and writevar ctxt updkind upd mode =
       let lvl = Ty.level ty in
       _V ((i,lvl)::path) var
     | A.HeapVar {var} ->
-      let addr = _int @@ readvar ctxt var in
-      (* TODO: P: IMPL NORM/OBLIV HEAP WRITES *)
+      let ptr = readvar ctxt var in
+      let addr, cell_size = match ptr with
+        | PointerVal {addr; cell_size} -> addr, cell_size
+        | _ -> raise @@ InterpFatal "HeapVar: not a pointer" in
+      if V.size upd > cell_size
+      then raise @@ InterpFatal "HeapVar: value exceeds cell_size";
       H.replace ctxt.heap addr upd
       
 in _V []
@@ -578,22 +590,24 @@ let interpCmd ctxt =
       | [] -> raise @@ InterpFatal ("PopCmd: stack empty")
       | _ :: bitstack' -> bitstack'
       end
-    | AllocCmd {var; exp} ->
+    | AllocCmd {var; exp; cell_size} ->
       if bit = 1 then (
         let v = eval ctxt exp in
+        let c = _int @@ eval ctxt cell_size in
         let addr = ctxt.next_address in
         H.add ctxt.heap addr v;
         ctxt.next_address <- ctxt.next_address + 1;
-        writevar ctxt ASSIGN (IntVal addr) 1 var
+        writevar ctxt ASSIGN (PointerVal{ addr; cell_size=c}) 1 var
       );
       bitstack
     (* P: Test *)
-    | OblivAllocCmd {var; exp} ->
+    | OblivAllocCmd {var; exp; cell_size} ->
       let v = eval ctxt exp in
+      let c = _int @@ eval ctxt cell_size in
       let addr = ctxt.next_address in
       H.add ctxt.heap addr v;
       ctxt.next_address <- ctxt.next_address + 1;
-      writevar ctxt BIND (IntVal addr) bit var;
+      writevar ctxt BIND (PointerVal{ addr; cell_size=c}) bit var;
       bitstack
     | ExitCmd ->
       send ctxt (M.Goodbye {sender=ctxt.name});
@@ -671,12 +685,15 @@ let interp ?(unsafe=false) print_when print_what (A.Prog{node;decls;hls}) =
       let i = eval ctxt init in
       H.add ctxt.store x i
 
-    | (A.VarDeclHeap{x;init;_}) ->
+    | (A.VarDeclHeap{x;init;cell_size;_}) ->
       let v = eval ctxt init in
+      let c = _int @@ eval ctxt cell_size in
       let addr = ctxt.next_address in
+      if (c < V.size v) then raise @@ InterpFatal "assigning oversized value into heap"
+      else
       H.add ctxt.heap addr v;
       ctxt.next_address <- ctxt.next_address + 1;
-      H.add ctxt.store x (IntVal addr)
+      H.add ctxt.store x (PointerVal{addr; cell_size=c})
     | (A.LocalChannelDecl _) ->
       ()
     | (A.NetworkChannelDecl{channel;ty;level;_}) ->
