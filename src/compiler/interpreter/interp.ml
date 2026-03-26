@@ -287,14 +287,14 @@ let op_unsafe oper v1 v2 =
 
 type update = ASSIGN | BIND
 let rec readvar ctxt =
-  let rec _V path (A.Var{var_base;loc;_}) = match var_base with
+  let rec _V access_path (A.Var{var_base;loc;_}) = match var_base with
     | A.SimpleVar x ->
       let v = 
         match loc with
         | LOCAL -> lookup ctxt.memory x
         | STORE -> lookup ctxt.store x in
-      let rec unwrap_indices idx_path v =
-        match idx_path, v with
+      let rec unwrap_indices access_elem v =
+        match access_elem, v with
         | [], _ -> v
         | (idx,lvl)::idx_tl, ArrayVal{length;data;_} ->
           let null = (NullVal [||]) in
@@ -324,14 +324,14 @@ let rec readvar ctxt =
             res
         | _ -> raise @@ InterpFatal "readVar"
         in
-      unwrap_indices path v
+      unwrap_indices access_path v
     | A.SubscriptVar {var;exp} ->
       let A.Exp{ty;_} = exp in
       let i = _int @@ eval ctxt exp in
       let lvl = Ty.level ty in
-      _V ((i,lvl)::path) var
+      _V ((i,lvl)::access_path) var
     | A.HeapVar {var} ->
-      let ptr = _V path var in
+      let ptr = _V access_path var in
       let addr = match ptr with
         | PointerVal{addr; _} -> addr
         | _ -> raise @@ InterpFatal "HeapVar: not a pointer" in
@@ -339,9 +339,6 @@ let rec readvar ctxt =
         | Some v -> v
         | None -> raise @@ InterpFatal ("could not find pointer in heap")
 in _V []
-
-
-(* let rec readloc ctxt = () *)
 
 and writevar ctxt updkind upd mode =
   let rec _V path (A.Var{var_base;_}) = match var_base with

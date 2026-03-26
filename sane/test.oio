@@ -2,11 +2,12 @@ TEST
 
 local channel STDOUT: string@{};
 
-var p: ptr(string@{})@{} = alloc("1", 12);
-var a: string@{}[]@{} = ["A"; "B"]{9};
+var i: int@{} = 12;
+var p: ptr(string@{})@{} = alloc("1", i);
+var a: string@{}[]@{} = ["A"; "B"]{i};
 
 START@{} (ignored: int@{}) {
-    *p ?= "14";
+    *p ?= "1400";
     output(STDOUT, *p);
     
     exit();

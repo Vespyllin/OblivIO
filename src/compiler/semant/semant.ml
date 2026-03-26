@@ -180,14 +180,17 @@ let rec transExp ({err;_} as ctxt) =
       let base = T.PAIR (aty,bty) in
       PairExp (a,b) ^! T.Type{base;level=L.bottom}
     | ArrayExp {data=arr; elem_size} ->
-      let elem_size, esty = e_ty @@ transExp ctxt elem_size in
-      checkInt esty err pos;
+      let elem_size, csty, cslvl = e_ty_lvl @@ transExp ctxt elem_size in
+
+      checkFlow cslvl L.bottom err pos;
+      checkInt csty err pos;
+
       let ty = match arr with
       | hd::_ ->
         let _, ty = e_ty @@ transExp ctxt hd in
         ty
       | _ ->
-        (* P: Check level *)
+        (* P: Check if this level is correct *)
         T.Type{base=Ty.EMPTY_ARRAY; level=L.bottom} in
       let f exp =
         let e,ety = e_ty @@ transExp ctxt exp in
