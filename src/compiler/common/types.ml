@@ -6,9 +6,9 @@ type basetype =
   | STRING
   | PAIR of ty * ty
   | ARRAY of ty
-  | EMPTY_ARRAY
   | POINTER of ty
   | ERROR
+  | ANY
 
 and ty = Type of {base: basetype; level: L.level}
 
@@ -32,10 +32,9 @@ let rec base_to_string = function
     ]
   | ARRAY t -> 
     to_string t ^ "[]"
-  | EMPTY_ARRAY -> 
-    "empty[]"
   | POINTER t -> String.concat "" ["ptr("; to_string t; ")"]
   | ERROR -> "error"
+  | ANY -> "any"
 
 and to_string (Type{base;level}) =
   String.concat ""

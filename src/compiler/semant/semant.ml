@@ -101,16 +101,19 @@ let rec checkAssignable value dest err pos =
   match T.base value, T.base dest with
   | T.ERROR, _ -> ()
   | _, T.ERROR -> ()
+  | T.ANY, _  -> ()
+
   | T.INT, T.INT -> ()
   | T.STRING, T.STRING -> ()
+
   | T.PAIR (a1,a2), T.PAIR (b1,b2) ->
     checkAssignable a1 b1 err pos;
     checkAssignable a2 b2 err pos;
   | T.ARRAY t_value, T.ARRAY t_dest ->
-    if T.base t_value = T.EMPTY_ARRAY then ()
-    else checkAssignable t_value t_dest err pos
+     checkAssignable t_value t_dest err pos
   | T.POINTER t_value, T.POINTER t_dest ->
     checkAssignable t_value t_dest err pos
+    
   | b1, b2 -> Err.error err pos @@ "cannot assign expression of type " ^ Ty.base_to_string b1 ^ " to variable of type " ^ Ty.base_to_string b2
 
 let checkLowPC pc err pos =
@@ -191,7 +194,7 @@ let rec transExp ({err;_} as ctxt) =
         ty
       | _ ->
         (* P: Check if this level is correct *)
-        T.Type{base=Ty.EMPTY_ARRAY; level=L.bottom} in
+        T.Type{base=Ty.ANY; level=L.bottom} in
       let f exp =
         let e,ety = e_ty @@ transExp ctxt exp in
         checkBaseType ty ety err pos;
@@ -380,6 +383,7 @@ let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
     checkAssignable initty ty err pos;
     VarDecl{x;ty;init;pos}
   | A.VarDeclHeap {ty;x;init;pos;cell_size} ->
+    (* Pointer cannot be more priviledged than the cell *)
     let rec checkPtrLevels ptr_ty err pos =
       match T.base ptr_ty with
       | T.POINTER cell ->
@@ -387,17 +391,19 @@ let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
         then Err.error err pos @@ "cell label must flow to pointer label";
         checkPtrLevels cell err pos
       | _ -> () in
+
     if H.mem gamma x
-    then Err.error err pos @@ "variable " ^ x ^ " already declared";
+    then Err.error err pos @@ "variable " ^ x ^ " already declared";    
+    
+    (* Public cell size *)
     let cs, csty, cslvl = e_ty_lvl @@ transExp ctxt cell_size in
     checkInt csty err pos;
-    checkFlow cslvl L.bottom err pos;
-    let init, initty = e_ty @@ transExp ctxt init in
-    let cellty = match T.base ty with
-      | T.POINTER t -> t
-      | _ -> errTy err pos @@ "heap variable must have a pointer type, got: " ^ T.to_string ty in
+    checkFlow cslvl L.bottom err pos; 
+
     checkPtrLevels ty err pos;
-    checkAssignable initty cellty err pos;
+    let init, initty, initlvl = e_ty_lvl @@ transExp ctxt init in
+    checkAssignable (T.Type{base=T.POINTER initty; level=initlvl}) ty err pos;
+    
     H.add gamma x ty;
     VarDeclHeap{x;ty;init;pos;cell_size=cs}
   | A.NetworkChannelDecl {channel;level;potential;ty;pos} ->

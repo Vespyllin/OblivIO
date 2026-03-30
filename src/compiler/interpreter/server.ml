@@ -125,7 +125,6 @@ let start json_file =
     | exception End_of_file ->
       begin match !sender_ref with
       | Some sender ->
-        print_endline @@ sender ^ " disconnected unexpectedly, allowing reconnect...";
         H.remove routing_table sender;
         clients := ST.add sender !clients
       | None -> ()
