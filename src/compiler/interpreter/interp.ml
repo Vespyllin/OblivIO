@@ -406,6 +406,10 @@ and writevar ctxt updkind upd mode =
       let addr, cell_size = match ptr with
         | PointerVal {addr; cell_size} -> addr, cell_size
         | _ -> raise @@ InterpFatal "HeapVar: not a pointer" in
+      
+      if addr = -1 
+      then raise @@ InterpFatal "HeapVar: Attempting to write to null pointer";
+
       if V.size upd > cell_size
       then raise @@ InterpFatal "HeapVar: value exceeds cell_size";
       H.replace ctxt.heap addr upd
@@ -441,7 +445,7 @@ and eval ctxt =
       else op oper v1 v2
     | A.PairExp (a,b) ->
       PairVal (_E a,_E b)
-    | ArrayExp {data=arr; elem_size;_} ->
+    | A.ArrayExp {data=arr; elem_size;_} ->
       let max_size = _int @@ _E elem_size in
       let length = List.length arr in
       let data =
@@ -453,6 +457,10 @@ and eval ctxt =
           (* P: Pad v to be of size elem_size *)
         |> Array.of_list in
       ArrayVal {length;data;elem_size=max_size}
+    | A.NilExp -> 
+      let addr = -1 in
+      let cell_size = 0 in
+      PointerVal{addr; cell_size}
   in _E
 
 exception Exit

@@ -27,6 +27,7 @@ and proj
 and exp_base
   = IntExp of int
   | StringExp of string
+  | NilExp
   | VarExp of var
   | ProjExp of {proj: proj; exp: exp}
   | SizeExp of exp

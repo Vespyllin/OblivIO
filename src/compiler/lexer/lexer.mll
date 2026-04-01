@@ -62,10 +62,14 @@ rule token = parse
 | "int"               { INTTYPE }
 | "string"            { STRINGTYPE }
 | "ptr"               { PTRTYPE }
+| "err"               { ERRTYPE }
 | "input"             { INPUT }
 | "output"            { OUTPUT }
 | "exit"              { EXIT }
 | "alloc"             { ALLOC }
+| "array"             { ARRAY }
+| "nil"               { NIL }
+| "_"                 { UNDERSCORE }
 | "??"                { COALESCE }
 | "//" nonnewline* '\n' { Lexing.new_line lexbuf; token lexbuf }
 | digit+ as i         { match int_of_string_opt i with

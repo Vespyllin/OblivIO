@@ -96,24 +96,32 @@ let checkComparable t1 t2 err pos =
     | b1, b2 -> Err.error err pos @@ "types " ^ Ty.base_to_string b1 ^ " and " ^ Ty.base_to_string b2 ^ " do not match"
   in _check t1 t2
 
-let rec checkAssignable value dest err pos =
+let rec checkAssignable ?self value dest err pos =
   checkFlowType value dest err pos;
   match T.base value, T.base dest with
   | T.ERROR, _ -> ()
   | _, T.ERROR -> ()
   | T.ANY, _  -> ()
+  | T.SELF, T.SELF -> ()
+  | _, T.SELF ->
+    begin match self with
+    | Some t -> 
+      checkAssignable ?self value t err pos
+    | None -> Err.error err pos @@ "SELF type used outside of recursive context"
+    end
+  | T.NULL t1, T.NULL t2 -> checkAssignable ?self t1 t2 err pos
 
   | T.INT, T.INT -> ()
   | T.STRING, T.STRING -> ()
 
   | T.PAIR (a1,a2), T.PAIR (b1,b2) ->
-    checkAssignable a1 b1 err pos;
-    checkAssignable a2 b2 err pos;
+    checkAssignable ?self a1 b1 err pos;
+    checkAssignable ?self a2 b2 err pos;
   | T.ARRAY t_value, T.ARRAY t_dest ->
-     checkAssignable t_value t_dest err pos
+    checkAssignable ?self t_value t_dest err pos
   | T.POINTER t_value, T.POINTER t_dest ->
-    checkAssignable t_value t_dest err pos
-    
+    checkAssignable ?self t_value t_dest err pos
+
   | b1, b2 -> Err.error err pos @@ "cannot assign expression of type " ^ Ty.base_to_string b1 ^ " to variable of type " ^ Ty.base_to_string b2
 
 let checkLowPC pc err pos =
@@ -184,10 +192,8 @@ let rec transExp ({err;_} as ctxt) =
       PairExp (a,b) ^! T.Type{base;level=L.bottom}
     | ArrayExp {data=arr; elem_size} ->
       let elem_size, csty, cslvl = e_ty_lvl @@ transExp ctxt elem_size in
-
       checkFlow cslvl L.bottom err pos;
       checkInt csty err pos;
-
       let ty = match arr with
       | hd::_ ->
         let _, ty = e_ty @@ transExp ctxt hd in
@@ -202,7 +208,7 @@ let rec transExp ({err;_} as ctxt) =
       let arr = List.map f arr in
       let base = T.ARRAY ty in
       ArrayExp {data=arr; elem_size} ^! T.Type{base;level=L.bottom}
-      
+    | NilExp -> NilExp ^! _bot (T.POINTER (T.Type{base=T.ANY; level=L.bottom}))
   in trexp
 and transVar ({err;_} as ctxt) =
   let rec trvar (A.Var{var_base;pos}) =
@@ -231,7 +237,11 @@ and transVar ({err;_} as ctxt) =
     | A.HeapVar {var} ->
       let var, vty, _, loc = v_ty_lvl_loc @@ trvar var in
       let t = match T.base vty with
-        | T.POINTER t -> t
+        | T.POINTER t ->
+          begin match T.base t with
+          | T.SELF -> vty
+          | _ -> t
+          end
         | _ -> errTy err pos @@ "variable is not a pointer type: " ^ T.to_string vty in
       begin
       match loc with
@@ -272,6 +282,7 @@ let transCmd ({err;_} as ctxt) =
           checkLowPC pc err pos
       end;
       checkAssignable ety varty err pos;
+      (* checkAssignable ~self:varty ety varty err pos; *)
       fromBase @@ AssignCmd{var;exp=e}, q
     | BindCmd {var;exp} ->
       let var,varty,varloc = v_ty_loc @@ transVar ctxt var in
@@ -356,7 +367,7 @@ let transCmd ({err;_} as ctxt) =
       let pointee_ty = match T.base varty with
         | T.POINTER t -> t
         | _ -> errTy err pos @@ "alloc target must be a pointer type, got: " ^ T.to_string varty in
-      checkAssignable ety pointee_ty err pos;
+      checkAssignable ~self:varty ety pointee_ty err pos;
       fromBase @@ AllocCmd{var; exp=e; cell_size=cs}, q
     | OblivAllocCmd {var; exp; cell_size} ->
       let var, varty, varloc = v_ty_loc @@ transVar ctxt var in
@@ -369,7 +380,7 @@ let transCmd ({err;_} as ctxt) =
         | T.POINTER t -> t
         | _ -> errTy err pos @@ "alloc target must be a pointer type, got: " ^ T.to_string varty in
 
-      checkAssignable ety pointee_ty err pos;
+      checkAssignable ~self:varty ety pointee_ty err pos;
       fromBase @@ OblivAllocCmd{var; exp=e; cell_size=cs}, q
   in trcmd
 
@@ -402,7 +413,7 @@ let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
 
     checkPtrLevels ty err pos;
     let init, initty, initlvl = e_ty_lvl @@ transExp ctxt init in
-    checkAssignable (T.Type{base=T.POINTER initty; level=initlvl}) ty err pos;
+    checkAssignable ~self:ty (T.Type{base=T.POINTER initty; level=initlvl}) ty err pos;
     
     H.add gamma x ty;
     VarDeclHeap{x;ty;init;pos;cell_size=cs}

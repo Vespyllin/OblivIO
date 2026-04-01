@@ -7,8 +7,10 @@ type basetype =
   | PAIR of ty * ty
   | ARRAY of ty
   | POINTER of ty
-  | ERROR
+  | ERROR 
   | ANY
+  | NULL of ty
+  | SELF
 
 and ty = Type of {base: basetype; level: L.level}
 

@@ -42,7 +42,7 @@ val checkComparable :
   Common.Types.ty ->
   Common.Types.ty -> Err.errorenv -> Lexing.position -> unit
 val checkAssignable :
-  Ty.ty -> Ty.ty -> Err.errorenv -> Lexing.position -> unit
+  ?self:Ty.ty -> Ty.ty -> Ty.ty -> Err.errorenv -> A.pos -> unit
 val checkLowPC : L.level -> Err.errorenv -> Lexing.position -> unit
 val checkInt : Ty.ty -> Err.errorenv -> Lexing.position -> unit
 val checkString : Ty.ty -> Err.errorenv -> Lexing.position -> unit

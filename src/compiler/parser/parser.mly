@@ -18,8 +18,8 @@
 %token AND OR ASSIGN BIND IF THEN ELSE WHILE DO
 %token SKIP OBLIF SEND INPUT OUTPUT
 %token INTTYPE STRINGTYPE
-%token PTRTYPE
-%token ALLOC
+%token PTRTYPE ERRTYPE UNDERSCORE
+%token ALLOC ARRAY NIL
 %token COALESCE
 
 %left OR
@@ -80,6 +80,7 @@ var:
 exp_base:
 | i=INT             { IntExp i }
 | s=STRING          { StringExp s }
+| NIL               { NilExp }
 | v=var             { VarExp v }
 | SIZE e=paren(exp) { SizeExp e }
 | e=binop_exp       { e }
@@ -87,8 +88,10 @@ exp_base:
 | SND exp=exp       { ProjExp {proj=Snd; exp} }
 | pair=paren(spair(exp,COMMA,exp))
   { PairExp pair }
-| arr=brack(slist(SEMICOLON,exp)) elem_size=brace(exp)
-  { ArrayExp {data=arr; elem_size} }
+| arr=brack(slist(SEMICOLON,exp))
+  { ArrayExp {data=arr; elem_size=Exp{exp_base=IntExp(-1); pos=$startpos}} }
+// | ARRAY LPAREN arr_size=exp COMMA default=exp RPAREN
+//   { ArrayExp {data=arr; elem_size} }
 
 exp:
 | e=exp_base          { Exp {exp_base=e; pos=$startpos} }
@@ -148,12 +151,17 @@ basetype:
   { T.ARRAY t }
 | PTRTYPE LPAREN t=type_at_lvl RPAREN
   { T.POINTER t }
+| ERRTYPE LPAREN t=type_at_lvl RPAREN
+  { T.NULL t }
 
 %inline type_at_lvl:
 | base=basetype AT level=lvl  { T.Type{base;level} }
+| UNDERSCORE                  { T.Type{base=T.SELF; level=L.bottom} }
 
 %inline type_anno:
 | COLON t=type_at_lvl  { t }
+// | COLON t=type_at_lvl EXCLAMATION { T.NULL t } // Errtype
+
 
 channel:
 | node=ID DIVIDE handler=ID
