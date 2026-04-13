@@ -9,7 +9,7 @@ type basetype =
   | POINTER of ty
   | ERROR 
   | ANY
-  | NULL of ty
+  | ERR of ty
   | SELF
 
 and ty = Type of {base: basetype; level: L.level}

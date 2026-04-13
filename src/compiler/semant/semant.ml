@@ -101,7 +101,9 @@ let rec checkAssignable ?self value dest err pos =
   match T.base value, T.base dest with
   | T.ERROR, _ -> ()
   | _, T.ERROR -> ()
+
   | T.ANY, _  -> ()
+
   | T.SELF, T.SELF -> ()
   | _, T.SELF ->
     begin match self with
@@ -109,7 +111,10 @@ let rec checkAssignable ?self value dest err pos =
       checkAssignable ?self value t err pos
     | None -> Err.error err pos @@ "SELF type used outside of recursive context"
     end
-  | T.NULL t1, T.NULL t2 -> checkAssignable ?self t1 t2 err pos
+
+  | T.ERR t1, T.ERR t2 -> checkAssignable ?self t1 t2 err pos
+  | _, T.ERR t2 -> 
+    checkAssignable ?self value t2 err pos  
 
   | T.INT, T.INT -> ()
   | T.STRING, T.STRING -> ()
@@ -156,24 +161,26 @@ let rec transExp ({err;_} as ctxt) =
       let (left,lty) = e_ty @@ trexp left in
       let (right,rty) = e_ty @@ trexp right in
       let level = L.lub (Ty.level lty) (Ty.level rty) in
-      let base =
-        match oper with
-        | PlusOp | MinusOp | TimesOp  | LtOp | LeOp | GtOp | GeOp | AndOp |OrOp ->
-          checkInt lty err pos;
-          checkInt rty err pos;
-          Ty.INT
+      let unwrap ty = match Ty.base ty with Ty.ERR t -> t | _ -> ty in
+      let has_err ty = match Ty.base ty with Ty.ERR _ -> true | _ -> false in
+      let base = match oper with
+        | CoalesceOp ->
+          begin match Ty.base lty, Ty.base rty with
+          | Ty.ERR t1, Ty.ERR t2 -> checkAssignable t1 t2 err pos; Ty.ERR t2
+          | Ty.ERR t1, _ -> checkAssignable t1 rty err pos; Ty.base rty
+          | _ -> Err.error err pos "left side of coalesce must be an err type"; Ty.base lty
+          end
+        | PlusOp | MinusOp | TimesOp | LtOp | LeOp | GtOp | GeOp | AndOp | OrOp ->
+          checkInt (unwrap lty) err pos;
+          checkInt (unwrap rty) err pos;
+          if has_err lty || has_err rty then Ty.ERR (Ty.Type{base=Ty.INT;level}) else Ty.INT
         | EqOp | NeqOp ->
-          checkComparable lty rty err pos;
-          Ty.INT 
-        | CaretOp -> 
-          checkString lty err pos;
-          checkString rty err pos;
-          Ty.STRING
-        | CoalesceOp -> 
-          if Ty.base lty != Ty.base rty then 
-            Err.error err pos "cannot coalesce an expression with another of a different type"; 
-
-          Ty.base lty
+          checkComparable (unwrap lty) (unwrap rty) err pos;
+          if has_err lty || has_err rty then Ty.ERR (Ty.Type{base=Ty.INT;level}) else Ty.INT
+        | CaretOp ->
+          checkString (unwrap lty) err pos;
+          checkString (unwrap rty) err pos;
+          if has_err lty || has_err rty then Ty.ERR (Ty.Type{base=Ty.STRING;level}) else Ty.STRING
         in
       OpExp{left;oper;right} ^! Ty.Type{base;level}
     | ProjExp {proj;exp} -> 
@@ -209,6 +216,7 @@ let rec transExp ({err;_} as ctxt) =
       let base = T.ARRAY ty in
       ArrayExp {data=arr; elem_size} ^! T.Type{base;level=L.bottom}
     | NilExp -> NilExp ^! _bot (T.POINTER (T.Type{base=T.ANY; level=L.bottom}))
+    | ErrExp -> ErrExp ^! _bot (T.ERR (T.Type{base=T.ANY; level=L.bottom}))
   in trexp
 and transVar ({err;_} as ctxt) =
   let rec trvar (A.Var{var_base;pos}) =

@@ -27,12 +27,15 @@ and exp_base
   = IntExp of int
   | StringExp of string
   | NilExp
+  | ErrExp
   | VarExp of var
   | ProjExp of {proj: proj; exp:exp}
   | SizeExp of exp
   | OpExp of { left: exp; oper: oper; right: exp }
   | PairExp of (exp*exp)
   | ArrayExp of {data: exp list; elem_size: exp}
+
+
 and cmd = Cmd of { cmd_base: cmd_base; pos: pos }
 and cmd_base
   = SkipCmd

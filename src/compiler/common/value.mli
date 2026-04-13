@@ -5,7 +5,7 @@ type value =
   | PairVal of value * value
   | ArrayVal of {length: int; data: value array; elem_size: int}
   | PointerVal of {addr: int; cell_size: int}
-  | NullVal of char array
+  | ErrVal of char array
 
 val to_string: value -> string
 

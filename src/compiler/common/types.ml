@@ -9,7 +9,7 @@ type basetype =
   | POINTER of ty
   | ERROR 
   | ANY
-  | NULL of ty
+  | ERR of ty
   | SELF
 
 and ty = Type of {base: basetype; level: L.level}
@@ -36,7 +36,7 @@ let rec base_to_string = function
     to_string t ^ "[]"
   | POINTER t -> String.concat "" ["ptr("; to_string t; ")"]
   | ERROR -> "error"
-  | NULL t -> "null" ^ to_string t 
+  | ERR t -> "err(" ^ base_to_string (base t) ^ ")"
   | ANY -> "any"
   | SELF -> "μ"
 

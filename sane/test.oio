@@ -2,11 +2,12 @@ TEST
 
 local channel STDOUT: string@{};
 
-var p: ptr(_)@{} = alloc(nil, 100);
-var q: ptr(ptr(_)@{H})@{} = alloc(p, 100);
+var p: err(string@{}) = error;
+var q: err(string@{}) = error;
+var c: string@{} = "ok";
 
 START@{} (ignored: int@{}) {
-    output(STDOUT, "ok");
-    
+    output(STDOUT, p ?? q ?? c);
+
     exit();
 }

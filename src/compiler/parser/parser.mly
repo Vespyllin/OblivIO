@@ -21,6 +21,7 @@
 %token PTRTYPE ERRTYPE UNDERSCORE
 %token ALLOC ARRAY NIL
 %token COALESCE
+%token ERRVAL
 
 %left OR
 %left AND
@@ -81,6 +82,7 @@ exp_base:
 | i=INT             { IntExp i }
 | s=STRING          { StringExp s }
 | NIL               { NilExp }
+| ERRVAL            { ErrExp }
 | v=var             { VarExp v }
 | SIZE e=paren(exp) { SizeExp e }
 | e=binop_exp       { e }
@@ -151,8 +153,6 @@ basetype:
   { T.ARRAY t }
 | PTRTYPE LPAREN t=type_at_lvl RPAREN
   { T.POINTER t }
-| ERRTYPE LPAREN t=type_at_lvl RPAREN
-  { T.NULL t }
 
 %inline type_at_lvl:
 | base=basetype AT level=lvl  { T.Type{base;level} }
@@ -160,7 +160,7 @@ basetype:
 
 %inline type_anno:
 | COLON t=type_at_lvl  { t }
-// | COLON t=type_at_lvl EXCLAMATION { T.NULL t } // Errtype
+| COLON ERRTYPE LPAREN t=type_at_lvl RPAREN { T.Type{base=T.ERR t; level=L.bottom} }
 
 
 channel:

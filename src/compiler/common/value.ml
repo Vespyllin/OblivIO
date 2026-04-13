@@ -5,7 +5,7 @@ type value =
 | PairVal of value * value
 | ArrayVal of {length: int; data: value array; elem_size: int}
 | PointerVal of {addr: int; cell_size: int}
-| NullVal of char array
+| ErrVal of char array
 
 let rec to_string = function
   | StringVal {length;data} ->
@@ -27,13 +27,13 @@ let rec to_string = function
     "[" ^ datastr ^ "]" ^ "{"^ string_of_int elem_size ^"}"
   | PointerVal {addr;cell_size} ->
       "ptr(" ^ string_of_int addr ^ ", " ^ string_of_int cell_size ^ ")" 
-  | NullVal _ ->
-      "null"
+  | ErrVal _ ->
+      "err"
 
 let rec size = function 
   | IntVal _ -> 8
   | StringVal{data;_} -> 8 + Array.length data
   | PairVal (a,b) -> size a + size b 
   | ArrayVal{data;_} -> 8 + Array.length data
-  | NullVal data -> 8 + Array.length data
+  | ErrVal data -> 8 + Array.length data
   | PointerVal _ -> 8

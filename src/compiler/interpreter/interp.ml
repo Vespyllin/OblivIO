@@ -242,7 +242,7 @@ let op oper v1 v2 =
   | CaretOp, StringVal {length=l1;data=d1}, StringVal {length=l2;data=d2} ->
     StringVal {length=l1+l2; data=safeConcat l1 d1 d2}
   (* P: Coalesce *)
-  | CoalesceOp, NullVal _dummy_data, b ->
+  | CoalesceOp, ErrVal _dummy_data, b ->
     begin match b with
     (* P: safeSelect data for pading *)
     | StringVal{length=l2;data} -> StringVal{length=l2; data}
@@ -297,7 +297,7 @@ let rec readvar ctxt =
         match access_elem, v with
         | [], _ -> v
         | (idx,lvl)::idx_tl, ArrayVal{length;data;_} ->
-          let null = (NullVal [||]) in
+          let null = (ErrVal [||]) in
           let maxidx = length - 1 in
           let cnd1 = Bool.to_int(idx >= 0) in
           let cnd2 = Bool.to_int(idx > maxidx) in
@@ -307,7 +307,7 @@ let rec readvar ctxt =
             if L.flows_to lvl L.bottom || ctxt.unsafe
               then if idx > maxidx then
                 (* P: Pad null data *)
-                NullVal [||]
+                ErrVal [||]
               else
                 unwrap_indices idx_tl data.(idx)
             else 
@@ -461,6 +461,8 @@ and eval ctxt =
       let addr = -1 in
       let cell_size = 0 in
       PointerVal{addr; cell_size}
+    | A.ErrExp -> 
+      ErrVal [||]
   in _E
 
 exception Exit
