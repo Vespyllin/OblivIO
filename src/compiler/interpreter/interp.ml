@@ -97,7 +97,7 @@ let safeConcat l (arr1 : char array) (arr2 : char array) =
     c := 0
   done;
   res
- 
+
 let rec safeEq v1 v2 =
   match v1, v2 with
   | IntVal a, IntVal b -> 
@@ -157,7 +157,7 @@ let rec unsafeEq v1 v2 =
     end
   | _ -> raise @@ NotImplemented "unsafeEq"
 
-let rec safeSelect (bit: int) (orig: value) (upd: value) =
+let safeSelect (bit: int) (orig: value) (upd: value) =
   let rec _S orig upd =
     match orig, upd with
     | IntVal a, IntVal b ->
@@ -186,24 +186,28 @@ let rec safeSelect (bit: int) (orig: value) (upd: value) =
       end
     | PairVal (a1,a2), PairVal (b1,b2) ->
       PairVal (_S a1 b1, _S a2 b2)
-    | ArrayVal{length=l1;data=d1;elem_size=es1}, ArrayVal{length=l2;data=d2;elem_size=es2} ->
-      (* P: Check if this is the correct implementation *)
+    | ArrayVal{length=_l1;data=d1}, ArrayVal{length=_l2;data=d2} ->
       begin
+        (* TOOD: make oblivious *)
         match Array.length d1, Array.length d2 with
         | arrlen1, arrlen2 when arrlen1 <= arrlen2 ->
-          let length = ((1 lxor bit)*l1) lor (bit*l2) in
-          let data = Array.copy d2 in
-          for i = 0 to arrlen1-1 do
-            data.(i) <- _S d1.(i) d2.(i)
-          done;
-          ArrayVal{length;data;elem_size=(max es1 es2)}
-        | _, arrlen2 ->
-          let length = ((1 lxor bit)*l1) lor (bit*l2) in
+          (* let length = ((1 lxor bit)*l1) lor (bit*l2) in
+          let data = Array.copy d2 in *)
+          if bit = 1 then upd else orig
+          (* raise @@ InterpFatal "Safeselect arr" *)
+          (* for i = 0 to arrlen1-1 do *)
+            (* data.(i) <- _S d1.(i) d2.(i) *)
+          (* done; *)
+          (* ArrayVal{length;data} *)
+        | _, _arrlen2 ->
+          if bit = 1 then upd else orig
+          (* let length = ((1 lxor bit)*l1) lor (bit*l2) in
           let data = Array.copy d1 in
           for i = 0 to arrlen2-1 do
             data.(i) <- safeSelect bit d1.(i) d2.(i)
           done;
-          ArrayVal{length;data; elem_size=(max es1 es2)}
+          ArrayVal{length;data} *)
+          (* raise @@ InterpFatal "Safeselect arr" *)
       end
     | _ -> raise @@ InterpFatal ("safeSelect: " ^ (V.to_string orig) ^  ", " ^ (V.to_string upd)) in
   _S orig upd
@@ -239,17 +243,34 @@ let op oper v1 v2 =
   | TimesOp, IntVal a, IntVal b ->
     IntVal (a*b)
   (* STRING *)
+  (* TODO: ERROR SIZING *)
   | CaretOp, StringVal {length=l1;data=d1}, StringVal {length=l2;data=d2} ->
     StringVal {length=l1+l2; data=safeConcat l1 d1 d2}
-  (* P: Coalesce *)
-  | CoalesceOp, ErrVal _dummy_data, b ->
-    begin match b with
-    (* P: safeSelect data for pading *)
-    | StringVal{length=l2;data} -> StringVal{length=l2; data}
-    | ArrayVal{length=l2;data;elem_size} -> ArrayVal{length=l2;data;elem_size}
-    | _ -> b
-  end
+    (* TODO: look into the first param of safeConcat *)
+  | CaretOp, ErrVal {padding=e1;_}, StringVal {data=d2;_} ->
+    ErrVal {padding=(safeConcat (Array.length e1) e1 d2); elem_size=0}
+  | CaretOp, StringVal {length=l1;data=d1}, ErrVal {padding=e2;_} ->
+    ErrVal {padding=(safeConcat l1 d1 e2);elem_size=0}
+  (* ARRAY *)
+  (* | CaretOp, ArrayVal {length=l1;data=d1}, ArrayVal {length=l2;data=d2} -> *)
+    (* ArrayVal {length=l1+l2; data=(safeConcatArr l1 d1 d2)} *)
+  (* | CaretOp, ErrVal e1, ArrayVal {length=l2;data=d2;elem_size} ->
+    ErrVal (Array.append e1 (Array.make l2 '\000'))
+  | CaretOp, ArrayVal {length=l1;data=d1;elem_size}, ErrVal e2 ->
+    ErrVal (Array.append (Array.make l1 '\000') e2)
+  | CaretOp, ErrVal e1, ErrVal e2 ->
+    ErrVal (Array.append e1 e2) *)
+  
+  (* COALESCE *)
+  | CoalesceOp, ErrVal {padding=e1;elem_size=elem_size1}, ErrVal {padding=e2;elem_size=elem_size2} ->
+    let maxlen = max (Array.length e1) (Array.length e2) in
+    ErrVal {padding=(Array.make maxlen '\000'); elem_size=max elem_size1 elem_size2}
+  | CoalesceOp, ErrVal _, b -> b
   | CoalesceOp, a, _ -> a
+  (* ERROR INT *)
+  | _, ErrVal _, _  
+  | _, _, ErrVal _ -> 
+    ErrVal{padding=[||]; elem_size=0}
   | _ -> raise @@ NotImplemented (V.to_string v1 ^ to_string oper ^ V.to_string v2)
 
 let op_unsafe oper v1 v2 =
@@ -283,6 +304,18 @@ let op_unsafe oper v1 v2 =
     let d1' = Array.sub d1 0 l1 in
     let d2' = Array.sub d2 0 l2 in
     StringVal {length=l1+l2; data=Array.append d1' d2'}
+
+    (* TODO: error sizing *)
+  | CaretOp, ErrVal {padding=e1;_}, StringVal {data=d2;_} -> 
+    ErrVal {padding=(Array.append e1 d2); elem_size=0}
+  | CaretOp, StringVal {data=d1;_}, ErrVal {padding=e2;_} -> 
+    ErrVal {padding=(Array.append d1 e2); elem_size=0}
+
+  | CoalesceOp, ErrVal _, b -> b
+  | CoalesceOp, a, _ -> a
+  | _, ErrVal _, _  
+  | _, _, ErrVal _ -> 
+    ErrVal{padding= [||]; elem_size=0}
   | _ -> raise @@ NotImplemented (V.to_string v1 ^ to_string oper ^ V.to_string v2)
 
 type update = ASSIGN | BIND
@@ -297,7 +330,7 @@ let rec readvar ctxt =
         match access_elem, v with
         | [], _ -> v
         | (idx,lvl)::idx_tl, ArrayVal{length;data;_} ->
-          let null = (ErrVal [||]) in
+          (* TODO: inherit elem size from parent array *)
           let maxidx = length - 1 in
           let cnd1 = Bool.to_int(idx >= 0) in
           let cnd2 = Bool.to_int(idx > maxidx) in
@@ -306,12 +339,11 @@ let rec readvar ctxt =
           let res =
             if L.flows_to lvl L.bottom || ctxt.unsafe
               then if idx > maxidx then
-                (* P: Pad null data *)
-                ErrVal [||]
+                (* TODO: OBLIVIATE *)
+                raise @@ InterpFatal "out of bounds"
               else
                 unwrap_indices idx_tl data.(idx)
             else 
-              (* P: Assuming length is public, do we need to iterate if we have equal sizing? *)
               let len = Array.length data - 1 in
               let res = unwrap_indices idx_tl data.(0) in
               let a = ref res in
@@ -319,8 +351,7 @@ let rec readvar ctxt =
                 let b = unwrap_indices idx_tl data.(i) in
                 a := safeSelect (Bool.to_int (i lxor idx = 0)) !a b
               done;
-              if cnd2 = 1 then null
-              else !a in  
+              !a in  
             res
         | _ -> raise @@ InterpFatal "readVar"
         in
@@ -355,11 +386,8 @@ and writevar ctxt updkind upd mode =
           | _ -> if mode = 1 then 
             H.add ctxt.store x upd
           end
-        | [(i,lvl)], ArrayVal{length;data;elem_size} ->
+        | [(i,lvl)], ArrayVal{length;data; _} ->
           let maxidx = length -1 in
-          if V.size upd > elem_size || i > maxidx
-          then raise @@ InterpFatal "assigning oversized value into array"
-          else
           let cnd1 = Bool.to_int(i >= 0) in
           let cnd2 = Bool.to_int(i > maxidx) in
           let idx = cnd1 * i in
@@ -370,6 +398,7 @@ and writevar ctxt updkind upd mode =
             | BIND, false ->
               data.(idx) <- safeSelect mode data.(idx) upd
             | _ ->
+              (* TODO: careful in case of array overwrite *)
               if mode = 1 then data.(idx) <- upd;
           else 
             (* non-public index, must obliv everything! *)
@@ -378,7 +407,7 @@ and writevar ctxt updkind upd mode =
               let right_index = Bool.to_int (i lxor idx = 0) in
               data.(i) <- safeSelect (right_index land mode) data.(i) upd
             done          
-        | (i,lvl)::tl, ArrayVal{length;data;_} ->
+        | (i,lvl)::tl, ArrayVal{length;data; _} ->
           let maxidx = length -1 in
           let cnd1 = Bool.to_int(i >= 0) in
           let cnd2 = Bool.to_int(i > maxidx) in
@@ -416,6 +445,30 @@ and writevar ctxt updkind upd mode =
       
 in _V []
 
+(* TODO: safeSelect int, string, pair, ptr *)
+and sizeSafeSelectWithDefault (v: value) (default: value) (mode: int) =
+  match v, default with
+  | IntVal _, IntVal _ ->
+      if mode = 1 then v else default
+
+  | StringVal {data=_da; length=_la}, StringVal {data=_db; length=_lb} ->
+      if mode = 1 then v else default
+
+  | ArrayVal _, ArrayVal _ ->
+      if mode = 1 then v else default
+
+  | PairVal _, PairVal _ ->
+      if mode = 1 then v else default
+
+  | PointerVal _, PointerVal _ ->
+      if mode = 1 then v else default
+
+  | ErrVal _, ErrVal _ ->
+      if mode = 1 then v else default
+
+  | _, _ ->
+      raise @@ InterpFatal "sizeSafeSelect mismatched values"
+
 and eval ctxt =
   let rec _E (A.Exp{exp_base;_}) =
     match exp_base with
@@ -445,24 +498,53 @@ and eval ctxt =
       else op oper v1 v2
     | A.PairExp (a,b) ->
       PairVal (_E a,_E b)
-    | A.ArrayExp {data=arr; elem_size;_} ->
-      let max_size = _int @@ _E elem_size in
+    | A.ArrayExp {data=arr} ->
       let length = List.length arr in
-      let data =
-        arr |> List.map (fun e ->
-          let v = _E e in
-          if V.size v > max_size
-          then raise @@ InterpFatal "element exceeds array max element size";
-          v)
-          (* P: Pad v to be of size elem_size *)
-        |> Array.of_list in
-      ArrayVal {length;data;elem_size=max_size}
+      let data = arr |> List.map (fun e -> _E e) |> Array.of_list in
+      ArrayVal {length;data}
     | A.NilExp -> 
       let addr = -1 in
       let cell_size = 0 in
       PointerVal{addr; cell_size}
     | A.ErrExp -> 
-      ErrVal [||]
+      (ErrVal{padding=[||]; elem_size=0})
+    (* TODO:  *)
+    | A.ReadExp {var; idx; default} ->
+      let v = readvar ctxt var in
+      let i = _int @@ _E idx in
+      let d = _E default in
+      match v with
+    | ArrayVal {length; data} ->
+      let maxidx = length - 1 in
+      let result = ref d in
+      for j = 0 to maxidx do
+        let use = Bool.to_int (j = i) in
+        let size_j = V.size data.(j) in
+        let good_size = if size_j <= V.size d then 1 else 0 in
+        let mode = good_size * use in
+        (* Get back a value with the same size as default (public) *)
+        let r = sizeSafeSelectWithDefault data.(j) d mode in
+        (* Safe select with what you get back, both result and r are of the same size (result starts w/ default) so it's size oblivious *)
+        result := safeSelect mode !result r;
+        if mode = 1 then begin
+          print_int j;
+          print_string " |> A: ";
+          print_string (V.to_string data.(i));
+          print_string " - ";
+          print_int (V.size data.(i));
+          print_string "    \tD: ";
+          print_string (V.to_string d);
+          print_string " - ";
+          print_int (V.size d);
+          print_string "    \t-> ";
+          print_string (V.to_string !result);
+          print_string " - ";
+          print_int (V.size !result);
+          print_string "\n"
+        end 
+      done;
+      !result
+      | _ -> raise @@ InterpFatal "ReadExp: not an array"
   in _E
 
 exception Exit

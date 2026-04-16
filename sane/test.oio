@@ -2,12 +2,18 @@ TEST
 
 local channel STDOUT: string@{};
 
-var p: err(string@{}) = error;
-var q: err(string@{}) = error;
-var c: string@{} = "ok";
+var p: string@{}[]@{}[]@{} = [["HEY"]; ["HI"]];
+var q: string@{}[]@{}[]@{} = [["A"]; ["B"]];
+var d: string@{}[]@{} = ["AB"];
+var c: string@{} = "C";
 
 START@{} (ignored: int@{}) {
-    output(STDOUT, p ?? q ?? c);
+    d = read(p,0,["1st"; "2nd"]);
+    c = read(d,0,"size14");
+    // p[0] = ["ABC"]; Invalid as it causes mutation, write(arr, idx, value) yields new array
+    // p = write(p, 0, "ABC") yields a new array (copy of old with new value written in)
+    
+    output(STDOUT, c);
 
     exit();
 }

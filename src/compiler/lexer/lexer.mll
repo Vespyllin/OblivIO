@@ -69,6 +69,7 @@ rule token = parse
 | "exit"              { EXIT }
 | "alloc"             { ALLOC }
 | "array"             { ARRAY }
+| "read"              { READ }
 | "nil"               { NIL }
 | "_"                 { UNDERSCORE }
 | "??"                { COALESCE }

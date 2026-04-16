@@ -1,0 +1,13 @@
+TEST
+
+local channel STDOUT: string@{};
+
+var p: err(string@{}) = error;
+var q: err(string@{}) = error;
+var c: string@{} = "ok";
+
+START@{} (ignored: int@{}) {
+    output(STDOUT,  c ^ q ?? "B");
+
+    exit();
+}

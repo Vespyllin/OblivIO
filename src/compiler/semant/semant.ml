@@ -197,24 +197,39 @@ let rec transExp ({err;_} as ctxt) =
       let (b,bty) = e_ty @@ trexp b in
       let base = T.PAIR (aty,bty) in
       PairExp (a,b) ^! T.Type{base;level=L.bottom}
-    | ArrayExp {data=arr; elem_size} ->
-      let elem_size, csty, cslvl = e_ty_lvl @@ transExp ctxt elem_size in
-      checkFlow cslvl L.bottom err pos;
-      checkInt csty err pos;
+    | ArrayExp {data=arr;_} ->
       let ty = match arr with
       | hd::_ ->
         let _, ty = e_ty @@ transExp ctxt hd in
         ty
-      | _ ->
-        (* P: Check if this level is correct *)
+      | [] ->
+        Err.error err pos "array literal cannot be empty";
         T.Type{base=Ty.ANY; level=L.bottom} in
-      let f exp =
-        let e,ety = e_ty @@ transExp ctxt exp in
-        checkBaseType ty ety err pos;
-        e in
+        let f exp =
+          let e,ety = e_ty @@ transExp ctxt exp in
+          checkBaseType ty ety err pos;
+          e in
       let arr = List.map f arr in
       let base = T.ARRAY ty in
-      ArrayExp {data=arr; elem_size} ^! T.Type{base;level=L.bottom}
+      ArrayExp {data=arr} ^! T.Type{base;level=L.bottom}
+    | ReadExp {var; idx; default} ->
+      let var, varty, _ = v_ty_loc @@ transVar ctxt var in
+      let idx, idxty, idxlvl = e_ty_lvl @@ transExp ctxt idx in
+      let default, defaultty, defaultlvl = e_ty_lvl @@ transExp ctxt default in
+
+      checkInt idxty err pos;
+      checkFlow defaultlvl L.bottom err pos;
+      
+      let elt_ty = match T.base varty with
+        | T.ARRAY t -> t
+        | _ -> errTy err pos @@ "variable is not an array type: " ^ T.to_string varty in
+
+      checkComparable defaultty elt_ty err pos; (* Default must match expected type *)
+      checkFlow idxlvl (T.level elt_ty) err pos;
+
+      let result_ty = raiseTo elt_ty idxlvl in
+      ReadExp{var; idx; default} ^! result_ty
+
     | NilExp -> NilExp ^! _bot (T.POINTER (T.Type{base=T.ANY; level=L.bottom}))
     | ErrExp -> ErrExp ^! _bot (T.ERR (T.Type{base=T.ANY; level=L.bottom}))
   in trexp

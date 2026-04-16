@@ -19,7 +19,7 @@
 %token SKIP OBLIF SEND INPUT OUTPUT
 %token INTTYPE STRINGTYPE
 %token PTRTYPE ERRTYPE UNDERSCORE
-%token ALLOC ARRAY NIL
+%token ALLOC ARRAY NIL READ
 %token COALESCE
 %token ERRVAL
 
@@ -91,9 +91,9 @@ exp_base:
 | pair=paren(spair(exp,COMMA,exp))
   { PairExp pair }
 | arr=brack(slist(SEMICOLON,exp))
-  { ArrayExp {data=arr; elem_size=Exp{exp_base=IntExp(-1); pos=$startpos}} }
-// | ARRAY LPAREN arr_size=exp COMMA default=exp RPAREN
-//   { ArrayExp {data=arr; elem_size} }
+  { ArrayExp {data=arr}}
+| READ LPAREN v=var COMMA idx=exp COMMA default=exp RPAREN
+  { ReadExp {var=v; idx; default}}
 
 exp:
 | e=exp_base          { Exp {exp_base=e; pos=$startpos} }
