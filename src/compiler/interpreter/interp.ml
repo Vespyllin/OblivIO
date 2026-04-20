@@ -6,6 +6,7 @@ module V = Common.Value
 module Ty = Common.Types
 module Tr = Common.Trace
 module C = Common.Channel
+module ORAM = ORAM.Path_oram
 
 module H = Hashtbl
 
@@ -28,6 +29,7 @@ type context =
   ; memory: (string, value) H.t
   ; store: (string, value) H.t
   ; heap: (int, value) H.t
+  ; oram: ORAM.state
   ; mutable next_address: int
   ; handlers: (string, handler_info) H.t
   ; trust_map: (C.channel, L.level * Ty.ty) H.t
@@ -68,7 +70,7 @@ let safeDiv a b =
   ((a / b')*(b0 lxor 1)) lor (b0*max_int)
 
 let _int = function
-  | IntVal n -> n
+  | IntVal {value;_} -> value
   | _ -> raise @@ InterpFatal "_I"
 
 let _string = function
@@ -100,10 +102,10 @@ let safeConcat l (arr1 : char array) (arr2 : char array) =
 
 let rec safeEq v1 v2 =
   match v1, v2 with
-  | IntVal a, IntVal b -> 
-    Bool.to_int @@ (a lxor b = 0)
-  | StringVal{length=l1;data=d1}, StringVal{length=l2;data=d2} ->
-    let mismatch = ref (l1 lxor l2) in
+  | IntVal {error=e1; value=v1}, IntVal {error=e2; value=v2} -> 
+    Bool.to_int(v1 lxor v2 = 0) land (e1 lxor 1) land (e2 lxor 1)
+  | StringVal{error=e1;length=l1;data=d1}, StringVal{error=e2;length=l2;data=d2} ->
+    let mismatch = ref (l1 lxor l2 lor e1 lor e2)  in
     let publen = min (Array.length d1) (Array.length d2) in
     let seclen = min l1 l2 in
     for i = 0 to publen-1 do
@@ -113,10 +115,12 @@ let rec safeEq v1 v2 =
       mismatch := (bit land (i1 lxor i2)) lor !mismatch
     done;
     Bool.to_int (!mismatch = 0)
+  | PointerVal {error=e1; addr=a1}, PointerVal {error=e2; addr=a2} -> 
+    Bool.to_int(a1 lxor a2 = 0) land (e1 lxor 1) land (e2 lxor 1)
   | PairVal(a1,a2), PairVal (b1,b2) ->
     safeEq a1 b1 * safeEq a2 b2
-  | ArrayVal{length=l1;data=d1;_}, ArrayVal{length=l2;data=d2;_} ->
-    let mismatch = ref (l1 lxor l2) in
+  | ArrayVal{error=e1;length=l1;data=d1;_}, ArrayVal{error=e2;length=l2;data=d2;_} ->
+    let mismatch = ref (l1 lxor l2 lor e1 lor e2)  in
     let publen = min (Array.length d1) (Array.length d2) in
     let seclen = min l1 l2 in
     for i = 0 to publen-1 do
@@ -130,12 +134,13 @@ let rec safeEq v1 v2 =
 exception Unequal
 let rec unsafeEq v1 v2 =
   match v1, v2 with
-  | IntVal a, IntVal b -> 
-    Bool.to_int @@ (a = b)
-  | StringVal{length=l1;data=d1}, StringVal{length=l2;data=d2} ->
+  | IntVal {error=e1;value=a}, IntVal {error=e2;value=b} -> 
+    Bool.to_int ((a = b) && (e1 + e2 = 0))
+  | StringVal{error=e1;length=l1;data=d1}, StringVal{error=e2;length=l2;data=d2} ->
     begin
     try
       if l1 <> l2 then raise Unequal;
+      if e1 + e2 > 0 then raise Unequal;
       for i = 0 to (min l1 l2)-1 do
         if d1.(i) <> d2.(i) then raise Unequal
       done;
@@ -160,164 +165,155 @@ let rec unsafeEq v1 v2 =
 let safeSelect (bit: int) (orig: value) (upd: value) =
   let rec _S orig upd =
     match orig, upd with
-    | IntVal a, IntVal b ->
-      IntVal (((bit lxor 1) * a) lor (bit * b))
-    | StringVal{length=l1;data=d1}, StringVal{length=l2;data=d2} ->
+    | IntVal {error=e1; value=v1}, IntVal {error=e2; value=v2} ->
+      let err = e1 lor e2 in
+      let not_err = 1 lxor err in
+      let value = not_err land (((bit lxor 1) * v1) lor (bit * v2)) in
+      IntVal {error=err; value}
+    | PointerVal {error=e1; addr=v1}, PointerVal {error=e2; addr=v2} ->
+      let err = e1 lor e2 in
+      let not_err = 1 lxor err in
+      let value = not_err land (((bit lxor 1) * v1) lor (bit * v2)) in
+      PointerVal {error=err; addr=value}
+    | StringVal{error=e1; length=l1; data=d1}, StringVal{error=e2; length=l2; data=d2} ->
+      let err = e1 lor e2 in
+      let not_err = 1 lxor err in
+      begin
+      match Array.length d1, Array.length d2 with
+      | arrlen1, arrlen2 when arrlen1 < arrlen2 ->
+        let length = not_err land (((1 lxor bit)*l1) lor (bit*l2)) in
+        let data = Array.copy d2 in
+        for i = 0 to arrlen1-1 do
+          let i1 = not_err land (1 lxor bit) * (Char.code @@ d1.(i)) in
+          let i2 = not_err land bit * (Char.code @@ d2.(i)) in
+          data.(i) <- Char.chr @@ i1 lor i2
+        done;
+        for i = arrlen1 to arrlen2-1 do
+          data.(i) <- Char.chr @@ not_err land (bit * (Char.code @@ d2.(i)))
+        done;
+        StringVal{error=err; length; data}
+      | _, arrlen2 ->
+        let length = not_err land (((1 lxor bit)*l1) lor (bit*l2)) in
+        let data = Array.copy d1 in
+        for i = 0 to arrlen2-1 do
+          let i1 = not_err land (1 lxor bit) * (Char.code @@ d1.(i)) in
+          let i2 = not_err land bit * (Char.code @@ d2.(i)) in
+          data.(i) <- Char.chr @@ i1 lor i2
+        done;
+        for i = arrlen2 to Array.length d1-1 do
+          data.(i) <- Char.chr @@ not_err land ((1 lxor bit) * (Char.code @@ d1.(i)))
+        done;
+        StringVal{error=err; length; data}
+      end
+    | PairVal (a1,a2), PairVal (b1,b2) ->
+      PairVal (_S a1 b1, _S a2 b2)
+    | ArrayVal{error=e1; length=l1; data=d1}, ArrayVal{error=e2; length=l2; data=d2} ->
+      let err = e1 lor e2 in
       begin
       match Array.length d1, Array.length d2 with
       | arrlen1, arrlen2 when arrlen1 < arrlen2 ->
         let length = ((1 lxor bit)*l1) lor (bit*l2) in
         let data = Array.copy d2 in
         for i = 0 to arrlen1-1 do
-          let i1 = (1 lxor bit) * (Char.code @@ d1.(i)) in
-          let i2 = bit * (Char.code @@ d2.(i)) in
-          data.(i) <- Char.chr @@ i1 lor i2
+          data.(i) <- _S d1.(i) d2.(i)
         done;
-        StringVal{length;data}
+        ArrayVal{error=err; length; data}
       | _, arrlen2 ->
         let length = ((1 lxor bit)*l1) lor (bit*l2) in
         let data = Array.copy d1 in
         for i = 0 to arrlen2-1 do
-          let i1 = (1 lxor bit) * (Char.code @@ d1.(i)) in
-          let i2 = bit * (Char.code @@ d2.(i)) in
-          data.(i) <- Char.chr @@ i1 lor i2
+          data.(i) <- _S d1.(i) d2.(i)
         done;
-        StringVal{length;data}
-      end
-    | PairVal (a1,a2), PairVal (b1,b2) ->
-      PairVal (_S a1 b1, _S a2 b2)
-    | ArrayVal{length=_l1;data=d1}, ArrayVal{length=_l2;data=d2} ->
-      begin
-        (* TOOD: make oblivious *)
-        match Array.length d1, Array.length d2 with
-        | arrlen1, arrlen2 when arrlen1 <= arrlen2 ->
-          (* let length = ((1 lxor bit)*l1) lor (bit*l2) in
-          let data = Array.copy d2 in *)
-          if bit = 1 then upd else orig
-          (* raise @@ InterpFatal "Safeselect arr" *)
-          (* for i = 0 to arrlen1-1 do *)
-            (* data.(i) <- _S d1.(i) d2.(i) *)
-          (* done; *)
-          (* ArrayVal{length;data} *)
-        | _, _arrlen2 ->
-          if bit = 1 then upd else orig
-          (* let length = ((1 lxor bit)*l1) lor (bit*l2) in
-          let data = Array.copy d1 in
-          for i = 0 to arrlen2-1 do
-            data.(i) <- safeSelect bit d1.(i) d2.(i)
-          done;
-          ArrayVal{length;data} *)
-          (* raise @@ InterpFatal "Safeselect arr" *)
+        ArrayVal{error=err; length; data}
       end
     | _ -> raise @@ InterpFatal ("safeSelect: " ^ (V.to_string orig) ^  ", " ^ (V.to_string upd)) in
   _S orig upd
 
+let rec get_error = function
+  | IntVal {error; _} -> error
+  | StringVal {error; _} -> error
+  | PointerVal {error; _} -> error
+  | ArrayVal {error; _} -> error
+  | _ -> 0
+
+(* TODO: ERROR HANDLING *)
 let op oper v1 v2 =
   match oper,v1,v2 with
   (* POLY *)
   | EqOp, _, _ ->
-    IntVal (safeEq v1 v2)
+    IntVal {error=0; value=(safeEq v1 v2)}
   | NeqOp, _, _ ->
-    IntVal ((safeEq v1 v2) lxor 1)
+    IntVal {error=0; value=((safeEq v1 v2) lxor 1)}
   (* INT *)
-  | LtOp, IntVal a, IntVal b ->
-    IntVal (Bool.to_int @@ (a - b < 0))
-  | LeOp, IntVal a, IntVal b ->
-    IntVal (Bool.to_int @@ (a - b <= 0))
-  | GtOp, IntVal a, IntVal b ->
-    IntVal (Bool.to_int @@ (a - b > 0))
-  | GeOp, IntVal a, IntVal b ->
-    IntVal (Bool.to_int @@ (a - b >= 0))
-  | AndOp, IntVal a, IntVal b ->
-    let ai = (Bool.to_int @@ (a <> 0)) in
-    let bi = (Bool.to_int @@ (b <> 0)) in
-    IntVal (Bool.to_int @@ (ai land bi > 0))
-  | OrOp, IntVal a, IntVal b ->
-    let ai = (Bool.to_int @@ (a <> 0)) in
-    let bi = (Bool.to_int @@ (b <> 0)) in
-    IntVal (Bool.to_int @@ (ai lor bi > 0))
-  | PlusOp, IntVal a, IntVal b ->
-    IntVal (a+b)
-  | MinusOp, IntVal a, IntVal b ->
-    IntVal (a-b)
-  | TimesOp, IntVal a, IntVal b ->
-    IntVal (a*b)
+  | LtOp, IntVal {error=e1; value=v1}, IntVal {error=e2; value=v2} ->
+    let not_err = 1 lxor (e1 lor e2) in
+    IntVal {error=0; value=not_err land Bool.to_int(v1 - v2 < 0)}
+  | LeOp, IntVal {error=e1; value=v1}, IntVal {error=e2; value=v2} ->
+    let not_err = 1 lxor (e1 lor e2) in
+    IntVal {error=0; value=not_err land Bool.to_int(v1 - v2 <= 0)}
+  | GtOp, IntVal {error=e1; value=v1}, IntVal {error=e2; value=v2} ->
+    let not_err = 1 lxor (e1 lor e2) in
+    IntVal {error=0; value=not_err land Bool.to_int(v1 - v2 > 0)}
+  | GeOp, IntVal {error=e1; value=v1}, IntVal {error=e2; value=v2} ->
+    let not_err = 1 lxor (e1 lor e2) in
+    IntVal {error=0; value=not_err land Bool.to_int(v1 - v2 >= 0)}
+  | AndOp, IntVal {error=e1; value=v1}, IntVal {error=e2; value=v2} ->
+    let not_err = 1 lxor (e1 lor e2) in
+    IntVal {error=0; value=not_err land Bool.to_int(v1 land v2 > 0)}
+  | OrOp, IntVal {error=e1; value=v1}, IntVal {error=e2; value=v2} ->
+    let not_err = 1 lxor (e1 lor e2) in
+    IntVal {error=0; value=not_err land Bool.to_int(v1 lor v2 > 0)}
+  | PlusOp, IntVal {error=e1; value=v1}, IntVal {error=e2; value=v2} ->
+    IntVal {error=e1 lor e2; value=v1+v2}
+  | MinusOp, IntVal {error=e1; value=v1}, IntVal {error=e2; value=v2} ->
+    IntVal {error=e1 lor e2; value=v1-v2}
+  | TimesOp, IntVal {error=e1; value=v1}, IntVal {error=e2; value=v2} ->
+    IntVal {error=e1 lor e2; value=v1*v2}
   (* STRING *)
-  (* TODO: ERROR SIZING *)
-  | CaretOp, StringVal {length=l1;data=d1}, StringVal {length=l2;data=d2} ->
-    StringVal {length=l1+l2; data=safeConcat l1 d1 d2}
-    (* TODO: look into the first param of safeConcat *)
-  | CaretOp, ErrVal {padding=e1;_}, StringVal {data=d2;_} ->
-    ErrVal {padding=(safeConcat (Array.length e1) e1 d2); elem_size=0}
-  | CaretOp, StringVal {length=l1;data=d1}, ErrVal {padding=e2;_} ->
-    ErrVal {padding=(safeConcat l1 d1 e2);elem_size=0}
+  | CaretOp, StringVal {error=e1;length=l1;data=d1}, StringVal {error=e2;length=l2;data=d2} ->
+    StringVal {error=e1 lor e2;length=l1+l2; data=safeConcat l1 d1 d2}
   (* ARRAY *)
   (* | CaretOp, ArrayVal {length=l1;data=d1}, ArrayVal {length=l2;data=d2} -> *)
     (* ArrayVal {length=l1+l2; data=(safeConcatArr l1 d1 d2)} *)
-  (* | CaretOp, ErrVal e1, ArrayVal {length=l2;data=d2;elem_size} ->
-    ErrVal (Array.append e1 (Array.make l2 '\000'))
-  | CaretOp, ArrayVal {length=l1;data=d1;elem_size}, ErrVal e2 ->
-    ErrVal (Array.append (Array.make l1 '\000') e2)
-  | CaretOp, ErrVal e1, ErrVal e2 ->
-    ErrVal (Array.append e1 e2) *)
-  
-  (* COALESCE *)
-  | CoalesceOp, ErrVal {padding=e1;elem_size=elem_size1}, ErrVal {padding=e2;elem_size=elem_size2} ->
-    let maxlen = max (Array.length e1) (Array.length e2) in
-    ErrVal {padding=(Array.make maxlen '\000'); elem_size=max elem_size1 elem_size2}
-  | CoalesceOp, ErrVal _, b -> b
-  | CoalesceOp, a, _ -> a
-  (* ERROR INT *)
-  | _, ErrVal _, _  
-  | _, _, ErrVal _ -> 
-    ErrVal{padding=[||]; elem_size=0}
+  | CoalesceOp, a, b ->
+    safeSelect (get_error a) a b
   | _ -> raise @@ NotImplemented (V.to_string v1 ^ to_string oper ^ V.to_string v2)
 
+(* TODO: error handling *)
 let op_unsafe oper v1 v2 =
   match oper,v1,v2 with
   (* POLY *)
   | EqOp, _, _ ->
-    IntVal (unsafeEq v1 v2)
+    IntVal {error=0; value=unsafeEq v1 v2}
   | NeqOp, _, _ ->
-    IntVal ((unsafeEq v1 v2) lxor 1)
+    IntVal {error=0; value=(unsafeEq v1 v2) lxor 1}
   (* INT *)
-  | LtOp, IntVal a, IntVal b ->
-    IntVal (Bool.to_int @@ (a < b))
-  | LeOp, IntVal a, IntVal b ->
-    IntVal (Bool.to_int @@ (a <= b))
-  | GtOp, IntVal a, IntVal b ->
-    IntVal (Bool.to_int @@ (a > b))
-  | GeOp, IntVal a, IntVal b ->
-    IntVal (Bool.to_int @@ (a >= b))
-  | AndOp, IntVal a, IntVal b ->
-    IntVal (Bool.to_int @@ (a <> 0 && b <> 0))
-  | OrOp, IntVal a, IntVal b ->
-    IntVal (Bool.to_int @@ (a <> 0 || b <> 0))
-  | PlusOp, IntVal a, IntVal b ->
-    IntVal (a+b)
-  | MinusOp, IntVal a, IntVal b ->
-    IntVal (a-b)
-  | TimesOp, IntVal a, IntVal b ->
-    IntVal (a*b)
+  | LtOp, IntVal {error=e1; value=v1}, IntVal {error=e2; value=v2} ->
+    IntVal {error=e1 lor e2; value=Bool.to_int(v1 < v2)}
+  | LeOp, IntVal {error=e1; value=v1}, IntVal {error=e2; value=v2} ->
+    IntVal {error=e1 lor e2; value=Bool.to_int(v1 <= v2)}
+  | GtOp, IntVal {error=e1; value=v1}, IntVal {error=e2; value=v2} ->
+    IntVal {error=e1 lor e2; value=Bool.to_int(v1 > v2)}
+  | GeOp, IntVal {error=e1; value=v1}, IntVal {error=e2; value=v2} ->
+    IntVal {error=e1 lor e2; value=Bool.to_int(v1 >= v2)}
+  | AndOp, IntVal {error=e1; value=v1}, IntVal {error=e2; value=v2} ->
+    IntVal {error=e1 lor e2; value=Bool.to_int(v1 <> 0 && v2 <> 0)}
+  | OrOp, IntVal {error=e1; value=v1}, IntVal {error=e2; value=v2} ->
+    IntVal {error=e1 lor e2; value=Bool.to_int(v1 <> 0 || v2 <> 0)}
+  | PlusOp, IntVal {error=e1; value=v1}, IntVal {error=e2; value=v2} ->
+    IntVal {error=e1 lor e2; value=v1+v2}
+  | MinusOp, IntVal {error=e1; value=v1}, IntVal {error=e2; value=v2} ->
+    IntVal {error=e1 lor e2; value=v1-v2}
+  | TimesOp, IntVal {error=e1; value=v1}, IntVal {error=e2; value=v2} ->
+    IntVal {error=e1 lor e2; value=v1*v2}
   (* STRING *)
-  | CaretOp, StringVal {length=l1;data=d1}, StringVal {length=l2;data=d2} ->
+  | CaretOp, StringVal {error=e1; length=l1; data=d1}, StringVal {error=e2; length=l2; data=d2} ->
     let d1' = Array.sub d1 0 l1 in
     let d2' = Array.sub d2 0 l2 in
-    StringVal {length=l1+l2; data=Array.append d1' d2'}
-
-    (* TODO: error sizing *)
-  | CaretOp, ErrVal {padding=e1;_}, StringVal {data=d2;_} -> 
-    ErrVal {padding=(Array.append e1 d2); elem_size=0}
-  | CaretOp, StringVal {data=d1;_}, ErrVal {padding=e2;_} -> 
-    ErrVal {padding=(Array.append d1 e2); elem_size=0}
-
-  | CoalesceOp, ErrVal _, b -> b
+    StringVal {error=e1 lor e2; length=l1+l2; data=Array.append d1' d2'}
   | CoalesceOp, a, _ -> a
-  | _, ErrVal _, _  
-  | _, _, ErrVal _ -> 
-    ErrVal{padding= [||]; elem_size=0}
   | _ -> raise @@ NotImplemented (V.to_string v1 ^ to_string oper ^ V.to_string v2)
-
+  
 type update = ASSIGN | BIND
 let rec readvar ctxt =
   let rec _V access_path (A.Var{var_base;loc;_}) = match var_base with
@@ -430,53 +426,28 @@ and writevar ctxt updkind upd mode =
       let i = _int @@ eval ctxt exp in
       let lvl = Ty.level ty in
       _V ((i,lvl)::path) var
-    | A.HeapVar {var} ->
-      let ptr = readvar ctxt var in
-      let addr, cell_size = match ptr with
-        | PointerVal {addr; cell_size} -> addr, cell_size
-        | _ -> raise @@ InterpFatal "HeapVar: not a pointer" in
-      
-      if addr = -1 
-      then raise @@ InterpFatal "HeapVar: Attempting to write to null pointer";
+    (* | A.HeapVar {var} -> *)
+    | A.HeapVar _ ->
+      (* let ptr = readvar ctxt var in
+      let error, addr = match ptr with
+        | PointerVal {error;addr} -> error,addr
+        | _ -> raise @@ InterpFatal "HeapVar: not a pointer" in *)
 
-      if V.size upd > cell_size
-      then raise @@ InterpFatal "HeapVar: value exceeds cell_size";
-      H.replace ctxt.heap addr upd
+      (* Add obliv logic mapping error or nil ptrs to the dummy address in ORAM if ptr is private, o/w throw error if nil *)
+      
+      raise @@ InterpFatal "Write HeapVar: NOT IMPL";
+      (* H.replace ctxt.heap addr upd *)
       
 in _V []
-
-(* TODO: safeSelect int, string, pair, ptr *)
-and sizeSafeSelectWithDefault (v: value) (default: value) (mode: int) =
-  match v, default with
-  | IntVal _, IntVal _ ->
-      if mode = 1 then v else default
-
-  | StringVal {data=_da; length=_la}, StringVal {data=_db; length=_lb} ->
-      if mode = 1 then v else default
-
-  | ArrayVal _, ArrayVal _ ->
-      if mode = 1 then v else default
-
-  | PairVal _, PairVal _ ->
-      if mode = 1 then v else default
-
-  | PointerVal _, PointerVal _ ->
-      if mode = 1 then v else default
-
-  | ErrVal _, ErrVal _ ->
-      if mode = 1 then v else default
-
-  | _, _ ->
-      raise @@ InterpFatal "sizeSafeSelect mismatched values"
 
 and eval ctxt =
   let rec _E (A.Exp{exp_base;_}) =
     match exp_base with
-    | A.IntExp i -> IntVal i
+    | A.IntExp i -> IntVal{error=0;value=i}
     | A.StringExp s -> 
       let length = String.length s in
       let data = s |> String.to_seq |> Array.of_seq in
-      StringVal {length;data}
+      StringVal {error=0;length;data}
     | A.VarExp v -> 
       readvar ctxt v
     | A.ProjExp {proj;exp} ->
@@ -489,7 +460,7 @@ and eval ctxt =
       end
     | A.SizeExp exp ->
       let v = _E exp in
-      IntVal (V.size v)
+      IntVal {error=0; value=V.size v}
     | A.OpExp {left;oper;right} ->
       let v1 = _E left in
       let v2 = _E right in
@@ -501,50 +472,10 @@ and eval ctxt =
     | A.ArrayExp {data=arr} ->
       let length = List.length arr in
       let data = arr |> List.map (fun e -> _E e) |> Array.of_list in
-      ArrayVal {length;data}
+      ArrayVal {error=0;length;data}
     | A.NilExp -> 
       let addr = -1 in
-      let cell_size = 0 in
-      PointerVal{addr; cell_size}
-    | A.ErrExp -> 
-      (ErrVal{padding=[||]; elem_size=0})
-    (* TODO:  *)
-    | A.ReadExp {var; idx; default} ->
-      let v = readvar ctxt var in
-      let i = _int @@ _E idx in
-      let d = _E default in
-      match v with
-    | ArrayVal {length; data} ->
-      let maxidx = length - 1 in
-      let result = ref d in
-      for j = 0 to maxidx do
-        let use = Bool.to_int (j = i) in
-        let size_j = V.size data.(j) in
-        let good_size = if size_j <= V.size d then 1 else 0 in
-        let mode = good_size * use in
-        (* Get back a value with the same size as default (public) *)
-        let r = sizeSafeSelectWithDefault data.(j) d mode in
-        (* Safe select with what you get back, both result and r are of the same size (result starts w/ default) so it's size oblivious *)
-        result := safeSelect mode !result r;
-        if mode = 1 then begin
-          print_int j;
-          print_string " |> A: ";
-          print_string (V.to_string data.(i));
-          print_string " - ";
-          print_int (V.size data.(i));
-          print_string "    \tD: ";
-          print_string (V.to_string d);
-          print_string " - ";
-          print_int (V.size d);
-          print_string "    \t-> ";
-          print_string (V.to_string !result);
-          print_string " - ";
-          print_int (V.size !result);
-          print_string "\n"
-        end 
-      done;
-      !result
-      | _ -> raise @@ InterpFatal "ReadExp: not an array"
+      PointerVal{error=0;addr}
   in _E
 
 exception Exit
@@ -597,7 +528,7 @@ let interpCmd ctxt =
           done;
         with Unequal -> ();
         end;
-        writevar ctxt ASSIGN (StringVal{length=(!j);data=blank}) bit var;
+        writevar ctxt ASSIGN (StringVal{error=0;length=(!j);data=blank}) bit var;
       );
       bitstack
     | InputCmd { var; size; _ } ->
@@ -607,7 +538,7 @@ let interpCmd ctxt =
       let data = Array.sub ctxt.input_buffer 0 len in
       let updbit = Bool.to_int @@ (data.(0) <> '\000') in
       let shouldBind = bit land updbit in
-      let str = StringVal{length=Array.length data;data} in
+      let str = StringVal{error=0;length=Array.length data;data} in
       writevar ctxt BIND str shouldBind var;
 
       let blank = Array.make len '\000' in
@@ -615,8 +546,8 @@ let interpCmd ctxt =
         Array.append
           (Array.sub ctxt.input_buffer len (max_len - len))
           blank in
-      let s1 = StringVal{length=max_len;data=ctxt.input_buffer} in
-      let s2 = StringVal{length=max_len;data=buf_upd} in
+      let s1 = StringVal{error=0;length=max_len;data=ctxt.input_buffer} in
+      let s2 = StringVal{error=0;length=max_len;data=buf_upd} in
       begin
         match safeSelect shouldBind s1 s2 with
         | StringVal{data;_} ->
@@ -647,26 +578,26 @@ let interpCmd ctxt =
     | IfCmd { test; thn; els } ->
       begin
       match eval ctxt test with
-      | IntVal 0 -> _I bitstack els
+      | IntVal {value=0; _} -> _I bitstack els
       | _ -> _I bitstack thn
       end
     | WhileCmd { test; body } ->
       begin
       match eval ctxt test with
-      | IntVal 0 -> bitstack
+      | IntVal {value=0; _} -> bitstack
       | _ -> (_I (_I bitstack body) cmd)
       end
     | OblivIfCmd { test; thn; els } when ctxt.unsafe ->
       begin
       match eval ctxt test with
-      | IntVal 0 -> _I bitstack els
+      | IntVal {value=0; _} -> _I bitstack els
       | _ -> _I bitstack thn
       end
     | OblivIfCmd { test; thn; els } ->
       let v = eval ctxt test in
       let i =
         match v with
-        | IntVal n -> Bool.to_int @@ (n <> 0)
+        | IntVal {value; _} -> Bool.to_int @@ (value <> 0)
         | _ -> 1 in
       let (~>) cmd_base = A.Cmd{cmd_base;pos} in
       let (++) c1 c2 = ~> (A.SeqCmd{c1;c2}) in
@@ -679,24 +610,22 @@ let interpCmd ctxt =
       | [] -> raise @@ InterpFatal ("PopCmd: stack empty")
       | _ :: bitstack' -> bitstack'
       end
-    | AllocCmd {var; exp; cell_size} ->
+    | AllocCmd {var; exp} ->
       if bit = 1 then (
         let v = eval ctxt exp in
-        let c = _int @@ eval ctxt cell_size in
         let addr = ctxt.next_address in
         H.add ctxt.heap addr v;
         ctxt.next_address <- ctxt.next_address + 1;
-        writevar ctxt ASSIGN (PointerVal{ addr; cell_size=c}) 1 var
+        writevar ctxt ASSIGN (PointerVal{ error=0;addr}) 1 var
       );
       bitstack
-    (* P: Test *)
-    | OblivAllocCmd {var; exp; cell_size} ->
+    (* P: Branch on private/public*)
+    | OblivAllocCmd {var; exp} ->
       let v = eval ctxt exp in
-      let c = _int @@ eval ctxt cell_size in
       let addr = ctxt.next_address in
       H.add ctxt.heap addr v;
       ctxt.next_address <- ctxt.next_address + 1;
-      writevar ctxt BIND (PointerVal{ addr; cell_size=c}) bit var;
+      writevar ctxt BIND (PointerVal{ error=0;addr}) bit var;
       bitstack
     | ExitCmd ->
       send ctxt (M.Goodbye {sender=ctxt.name});
@@ -761,6 +690,7 @@ let interp ?(unsafe=false) print_when print_what (A.Prog{node;decls;hls}) =
     ; memory = H.create 1024
     ; store = H.create 1024
     ; heap = H.create 1024
+    ; oram = ORAM.create ~capacity:16 ~block_size:8 ~z:4
     ; next_address = 0
     ; handlers = H.create 1024
     ; trust_map = H.create 1024
@@ -774,15 +704,15 @@ let interp ?(unsafe=false) print_when print_what (A.Prog{node;decls;hls}) =
       let i = eval ctxt init in
       H.add ctxt.store x i
 
-    | (A.VarDeclHeap{x;init;cell_size;_}) ->
-      let v = eval ctxt init in
-      let c = _int @@ eval ctxt cell_size in
-      let addr = ctxt.next_address in
-      if (c < V.size v) then raise @@ InterpFatal "assigning oversized value into heap"
-      else
-      H.add ctxt.heap addr v;
+    | (A.VarDeclHeap _) ->
+        (* | (A.VarDeclHeap{x;init;_}) -> *)
+      (* let v = eval ctxt init in
+      let addr = ctxt.next_address in *)
+      (* TODO: branch on public *)
+      (* H.add ctxt.heap addr v;
       ctxt.next_address <- ctxt.next_address + 1;
-      H.add ctxt.store x (PointerVal{addr; cell_size=c})
+      H.add ctxt.store x (PointerVal{error=0;addr}) *)
+      raise @@ InterpFatal "VarDeclHeap: not impl"
     | (A.LocalChannelDecl _) ->
       ()
     | (A.NetworkChannelDecl{channel;ty;level;_}) ->

@@ -8,7 +8,7 @@ include Oper
 type program = Prog of { node: string; decls: decl list; hls: hl list }
 and decl
   = VarDecl of { ty: T.ty; x: string; init: exp; pos: pos }
-  | VarDeclHeap of { ty: T.ty; x: string; init: exp; pos: pos; cell_size: exp }
+  | VarDeclHeap of { ty: T.ty; x: string; init: exp; pos: pos}
   | NetworkChannelDecl of { channel: Ch.channel; level: L.level; potential: int; ty: T.ty; pos: pos }
   | LocalChannelDecl of { ch: string; ty: T.ty; pos: pos }
 and hl
@@ -27,7 +27,6 @@ and exp_base
   = IntExp of int
   | StringExp of string
   | NilExp
-  | ErrExp
   | VarExp of var
   | ProjExp of {proj: proj; exp:exp}
   | SizeExp of exp
@@ -35,7 +34,6 @@ and exp_base
   | PairExp of (exp*exp)
   | ArrayExp of {data: exp list}
   (* | ArrayConstructorExp of {value: exp; length: exp; elem_size: exp} *)
-  | ReadExp of {var: var; idx: exp; default: exp}
 
 
 and cmd = Cmd of { cmd_base: cmd_base; pos: pos }
@@ -51,7 +49,7 @@ and cmd_base
   | WhileCmd of { test: exp; body: cmd }
   | OblivIfCmd of { test: exp; thn: cmd; els: cmd }
   | ExitCmd
-  | AllocCmd of {var: var; exp: exp; cell_size: exp}
-  | OblivAllocCmd of { var: var; exp: exp; cell_size: exp}
+  | AllocCmd of {var: var; exp: exp}
+  | OblivAllocCmd of { var: var; exp: exp}
 
  

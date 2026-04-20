@@ -212,26 +212,7 @@ let rec transExp ({err;_} as ctxt) =
       let arr = List.map f arr in
       let base = T.ARRAY ty in
       ArrayExp {data=arr} ^! T.Type{base;level=L.bottom}
-    | ReadExp {var; idx; default} ->
-      let var, varty, _ = v_ty_loc @@ transVar ctxt var in
-      let idx, idxty, idxlvl = e_ty_lvl @@ transExp ctxt idx in
-      let default, defaultty, defaultlvl = e_ty_lvl @@ transExp ctxt default in
-
-      checkInt idxty err pos;
-      checkFlow defaultlvl L.bottom err pos;
-      
-      let elt_ty = match T.base varty with
-        | T.ARRAY t -> t
-        | _ -> errTy err pos @@ "variable is not an array type: " ^ T.to_string varty in
-
-      checkComparable defaultty elt_ty err pos; (* Default must match expected type *)
-      checkFlow idxlvl (T.level elt_ty) err pos;
-
-      let result_ty = raiseTo elt_ty idxlvl in
-      ReadExp{var; idx; default} ^! result_ty
-
     | NilExp -> NilExp ^! _bot (T.POINTER (T.Type{base=T.ANY; level=L.bottom}))
-    | ErrExp -> ErrExp ^! _bot (T.ERR (T.Type{base=T.ANY; level=L.bottom}))
   in trexp
 and transVar ({err;_} as ctxt) =
   let rec trvar (A.Var{var_base;pos}) =
@@ -379,32 +360,28 @@ let transCmd ({err;_} as ctxt) =
     | ExitCmd -> 
       checkLowPC pc err pos;
       fromBase ExitCmd, q
-    | AllocCmd {var; exp; cell_size} ->
+    | AllocCmd {var; exp} ->
       let var, varty, varloc = v_ty_loc @@ transVar ctxt var in
       let e, ety = e_ty @@ transExp ctxt exp in
-      let cs, csty = e_ty @@ transExp ctxt cell_size in
 
-      checkInt csty err pos;
       checkLowPC pc err pos;
       checkWritable var varloc err pos;
       let pointee_ty = match T.base varty with
         | T.POINTER t -> t
         | _ -> errTy err pos @@ "alloc target must be a pointer type, got: " ^ T.to_string varty in
       checkAssignable ~self:varty ety pointee_ty err pos;
-      fromBase @@ AllocCmd{var; exp=e; cell_size=cs}, q
-    | OblivAllocCmd {var; exp; cell_size} ->
+      fromBase @@ AllocCmd{var; exp=e}, q
+    | OblivAllocCmd {var; exp} ->
       let var, varty, varloc = v_ty_loc @@ transVar ctxt var in
       let e, ety = e_ty @@ transExp ctxt exp in
-      let cs, csty = e_ty @@ transExp ctxt cell_size in
 
-      checkInt csty err pos;
       checkWritable var varloc err pos;
       let pointee_ty = match T.base varty with
         | T.POINTER t -> t
         | _ -> errTy err pos @@ "alloc target must be a pointer type, got: " ^ T.to_string varty in
 
       checkAssignable ~self:varty ety pointee_ty err pos;
-      fromBase @@ OblivAllocCmd{var; exp=e; cell_size=cs}, q
+      fromBase @@ OblivAllocCmd{var; exp=e}, q
   in trcmd
 
 let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
@@ -416,7 +393,8 @@ let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
     H.add gamma x ty;
     checkAssignable initty ty err pos;
     VarDecl{x;ty;init;pos}
-  | A.VarDeclHeap {ty;x;init;pos;cell_size} ->
+  | A.VarDeclHeap {ty;x;init;pos} ->
+    (* TODO: Branch on public/private *)
     (* Pointer cannot be more priviledged than the cell *)
     let rec checkPtrLevels ptr_ty err pos =
       match T.base ptr_ty with
@@ -427,19 +405,14 @@ let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
       | _ -> () in
 
     if H.mem gamma x
-    then Err.error err pos @@ "variable " ^ x ^ " already declared";    
-    
-    (* Public cell size *)
-    let cs, csty, cslvl = e_ty_lvl @@ transExp ctxt cell_size in
-    checkInt csty err pos;
-    checkFlow cslvl L.bottom err pos; 
+    then Err.error err pos @@ "variable " ^ x ^ " already declared";       
 
     checkPtrLevels ty err pos;
     let init, initty, initlvl = e_ty_lvl @@ transExp ctxt init in
     checkAssignable ~self:ty (T.Type{base=T.POINTER initty; level=initlvl}) ty err pos;
     
     H.add gamma x ty;
-    VarDeclHeap{x;ty;init;pos;cell_size=cs}
+    VarDeclHeap{x;ty;init;pos}
   | A.NetworkChannelDecl {channel;level;potential;ty;pos} ->
     if H.mem lambda channel
     then Err.error err pos @@ "network channel " ^ Ch.to_string channel ^ " already declared";

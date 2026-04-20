@@ -1,16 +1,15 @@
 
 type value =
-| IntVal of int
-| StringVal of {length: int; data: char array}
+| IntVal of {error: int; value:int}
+| StringVal of {error: int; length: int; data: char array}
 | PairVal of value * value
-| ArrayVal of {length: int; data: value array}
-| PointerVal of {addr: int; cell_size: int}
-| ErrVal of {padding: char array; elem_size: int}
+| ArrayVal of {error: int; length: int; data: value array}
+| PointerVal of {error: int; addr: int}
 
 let rec to_string = function
-  | StringVal {length;data} ->
-    "\"" ^ (data |> Array.to_list |> Util.take length |> List.to_seq |> String.of_seq) ^ "\""
-  | IntVal n -> Int.to_string n
+  | StringVal {error; length;data} ->
+    if error = 1 then "ErrString" else "\"" ^ (data |> Array.to_list |> Util.take length |> List.to_seq |> String.of_seq) ^ "\""
+  | IntVal {error; value} -> if error = 1 then "ErrInt" else Int.to_string value
   | PairVal (a,b) -> String.concat "" [
       "("
     ; to_string a
@@ -18,22 +17,21 @@ let rec to_string = function
     ; to_string b
     ; ")"
     ]
-  | ArrayVal {length;data} ->
+  | ArrayVal {error; length;data} ->
+    if error = 1 then "ErrArr" else
     let datastr =
       data |> Array.to_list
            |> Util.take length
            |> List.map to_string
            |> String.concat ";" in
     "[" ^ datastr ^ "]"
-  | PointerVal {addr;cell_size} ->
-      "ptr(" ^ string_of_int addr ^ ", " ^ string_of_int cell_size ^ ")" 
-  | ErrVal _ ->
-      "err"
+  | PointerVal {error;addr} ->
+      if error = 1 then "ErrPtr" else
+      "ptr(" ^ string_of_int addr ^ ")" 
 
 let rec size = function 
   | IntVal _                          ->    8
   | StringVal{data;_}     ->    8 + Array.length data
   | PairVal (a,b)       ->    size a + size b 
-  | ArrayVal {data;  _}  ->    8 + Array.length data
-  | ErrVal {padding; _}   ->    8 + Array.length padding
+  | ArrayVal {data;  _}  ->    8 + (8*Array.length data)
   | PointerVal _                      ->    8

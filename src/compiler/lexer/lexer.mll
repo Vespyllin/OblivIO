@@ -63,7 +63,6 @@ rule token = parse
 | "string"            { STRINGTYPE }
 | "ptr"               { PTRTYPE }
 | "err"               { ERRTYPE }
-| "error"             { ERRVAL }
 | "input"             { INPUT }
 | "output"            { OUTPUT }
 | "exit"              { EXIT }

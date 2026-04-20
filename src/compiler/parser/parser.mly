@@ -21,7 +21,6 @@
 %token PTRTYPE ERRTYPE UNDERSCORE
 %token ALLOC ARRAY NIL READ
 %token COALESCE
-%token ERRVAL
 
 %left OR
 %left AND
@@ -82,7 +81,6 @@ exp_base:
 | i=INT             { IntExp i }
 | s=STRING          { StringExp s }
 | NIL               { NilExp }
-| ERRVAL            { ErrExp }
 | v=var             { VarExp v }
 | SIZE e=paren(exp) { SizeExp e }
 | e=binop_exp       { e }
@@ -92,8 +90,6 @@ exp_base:
   { PairExp pair }
 | arr=brack(slist(SEMICOLON,exp))
   { ArrayExp {data=arr}}
-| READ LPAREN v=var COMMA idx=exp COMMA default=exp RPAREN
-  { ReadExp {var=v; idx; default}}
 
 exp:
 | e=exp_base          { Exp {exp_base=e; pos=$startpos} }
@@ -127,10 +123,10 @@ cmd_base:
 | EXIT LPAREN RPAREN SEMICOLON
   { ExitCmd }
 // Alloc
-| var=var ASSIGN ALLOC LPAREN exp=exp COMMA cell_size=exp RPAREN SEMICOLON
-  { AllocCmd {var;exp;cell_size} }
-| var=var BIND ALLOC LPAREN exp=exp COMMA cell_size=exp RPAREN SEMICOLON
-  { OblivAllocCmd {var;exp;cell_size} }
+| var=var ASSIGN ALLOC LPAREN exp=exp RPAREN SEMICOLON
+  { AllocCmd {var;exp} }
+| var=var BIND ALLOC LPAREN exp=exp RPAREN SEMICOLON
+  { OblivAllocCmd {var;exp} }
 
 cmd_seq:
 | c=cmd_base_seq
@@ -176,8 +172,8 @@ potential:
 decl:
 | VAR x=ID ty=type_anno ASSIGN init=exp SEMICOLON
   { VarDecl {ty; x; init; pos=$startpos} }
-| VAR x=ID ty=type_anno ASSIGN ALLOC LPAREN init=exp COMMA cell_size=exp RPAREN SEMICOLON
-  { VarDeclHeap {ty; x; init; pos=$startpos; cell_size} }
+| VAR x=ID ty=type_anno ASSIGN ALLOC LPAREN init=exp RPAREN SEMICOLON
+  { VarDeclHeap {ty; x; init; pos=$startpos} }
 | NETWORK CHANNEL channel=channel AT level=lvl potential=potential ty=type_anno SEMICOLON
   { NetworkChannelDecl {ty; level; channel; potential; pos=$startpos(channel)} }
 | LOCAL CHANNEL ch=ID ty=type_anno SEMICOLON

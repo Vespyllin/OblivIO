@@ -85,3 +85,57 @@ let info =
 
 let _ = 
   Cmd.v info main_t |> Cmd.eval |> exit
+(* 
+module TEST = ORAM.Path_oram
+
+let () =
+  Printf.printf "=== Path ORAM tests ===\n%!";
+ 
+  let write oram addr s =
+    ignore (TEST.access oram ~address:addr ~op:(`Write (Bytes.of_string s)))
+  in
+  let read oram addr =
+    Bytes.to_string (TEST.access oram ~address:addr ~op:`Read)
+  in
+ 
+  (* Basic read/write *)
+  let oram = TEST.create ~capacity:16 ~block_size:8 ~z:4 in
+  write oram 0  "hello!!!";
+  write oram 5  "world!!!";
+  write oram 15 "end!!!!!";
+  assert (read oram 0  = "hello!!!");
+  assert (read oram 5  = "world!!!");
+  assert (read oram 15 = "end!!!!!");
+  Printf.printf "PASS: basic read/write\n%!";
+ 
+  (* Overwrite *)
+  write oram 5 "updated!";
+  assert (read oram 5 = "updated!");
+  Printf.printf "PASS: overwrite\n%!";
+ 
+  (* Default value for unwritten block *)
+  let zero = String.make 8 '\x00' in
+  assert (read oram 3 = zero);
+  Printf.printf "PASS: unwritten block returns zero\n%!";
+ 
+  (* Repeated reads are stable *)
+  write oram 7 "stable!!";
+  for _ = 1 to 20 do
+    assert (read oram 7 = "stable!!")
+  done;
+  Printf.printf "PASS: repeated reads are stable\n%!";
+ 
+  (* Workload over all addresses *)
+  let oram2 = TEST.create ~capacity:16 ~block_size:4 ~z:4 in
+  let n = 16 in
+  let expected = Array.init n (fun i ->
+    let s = Printf.sprintf "%04d" i in
+    write oram2 i s; s
+  ) in
+  for i = 0 to n - 1 do
+    assert (read oram2 i = expected.(i))
+  done;
+  Printf.printf "PASS: workload over all %d addresses\n%!" n;
+ 
+  Printf.printf "All tests passed.\n%!"
+  *)
