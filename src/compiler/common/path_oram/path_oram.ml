@@ -7,16 +7,17 @@ let () = Random.self_init ()
 (* ------------------------------------------------------------------ *)
 
 type state = {
-  height     : int;
-  block_size : int;
-  z          : int;
+  height                    : int;
+  block_size                : int;
+  z                         : int;
+  mutable next_address      : int;
 
-  memory     : Bucket.bucket array;
+  memory                    : Bucket.bucket array;
   (** position.(a) = the leaf index that block `a` is currently assigned to. *)
   (* TODO: Make oblivious (Linear scan works) *)
-  position   : int array;
+  position                  : int array;
   (** Buffer of blocks that could not be evicted back into the tree during the last access. *)
-  mutable stash : Bucket.block list;
+  mutable stash             : Bucket.block list;
 }
 
 (* ------------------------------------------------------------------ *)
@@ -35,19 +36,6 @@ let can_place ~height leaf node =
   let l = log2 node in
   (leaf lsr (height - l)) = node
 
-(* ------------------------------------------------------------------ *)
-(* Construction                                                         *)
-(* ------------------------------------------------------------------ *)
-
-let create ~capacity ~block_size ~z =
-  assert (capacity >= 4 && capacity land (capacity - 1) = 0);
-  assert (z >= 2);
-  let height     = log2 capacity - 1 in
-  let first_leaf = 1 lsl height in
-  let num_leaves = 1 lsl height in
-  let memory     = Array.init capacity (fun _ -> Bucket.make_bucket ~z ~block_size) in
-  let position   = Array.init capacity (fun _ -> first_leaf + Random.int num_leaves) in
-  { height; block_size; z; memory; position; stash = [] }
 
 (* ------------------------------------------------------------------ *)
 (* Bucket I/O                                                           *)
@@ -130,3 +118,25 @@ let access oram ~address ~op =
   done;
 
   current_data
+
+let create ~capacity ~block_size ~z =
+  assert (capacity >= 4 && capacity land (capacity - 1) = 0);
+  assert (z >= 2);
+  let height     = log2 capacity - 1 in
+  let first_leaf = 1 lsl height in
+  let num_leaves = 1 lsl height in
+  let memory     = Array.init capacity (fun _ -> Bucket.make_bucket ~z ~block_size) in
+  let position   = Array.init capacity (fun _ -> first_leaf + Random.int num_leaves) in
+  let x = { height; block_size; z; memory; position; next_address = 0; stash = [] } in
+  ignore (access x ~address:0 ~op:(`Write (Bytes.make block_size '\x00')));
+  { height; block_size; z; memory; position; next_address = 1; stash = [] }
+
+let alloc oram value =
+  let address = oram.next_address in
+  let block_size = oram.block_size in
+  let base_block = (Bytes.make block_size 'a') in 
+  (* TODO: safe select baseblock *)
+  let write = value in
+  ignore (access oram ~address:oram.next_address ~op:(`Write base_block));
+  oram.next_address <- address + 1;
+  address

@@ -103,7 +103,6 @@ let rec checkAssignable ?self value dest err pos =
   | _, T.ERROR -> ()
 
   | T.ANY, _  -> ()
-
   | T.SELF, T.SELF -> ()
   | _, T.SELF ->
     begin match self with
@@ -111,20 +110,30 @@ let rec checkAssignable ?self value dest err pos =
       checkAssignable ?self value t err pos
     | None -> Err.error err pos @@ "SELF type used outside of recursive context"
     end
-
   | T.ERR t1, T.ERR t2 -> checkAssignable ?self t1 t2 err pos
   | _, T.ERR t2 -> 
     checkAssignable ?self value t2 err pos  
-
   | T.INT, T.INT -> ()
   | T.STRING, T.STRING -> ()
-
   | T.PAIR (a1,a2), T.PAIR (b1,b2) ->
     checkAssignable ?self a1 b1 err pos;
     checkAssignable ?self a2 b2 err pos;
   | T.ARRAY t_value, T.ARRAY t_dest ->
     checkAssignable ?self t_value t_dest err pos
   | T.POINTER t_value, T.POINTER t_dest ->
+    if not (T.base t_value = T.ANY) then (
+      if not (L.flows_to (T.level t_value) (T.level t_dest) && L.flows_to (T.level t_dest) (T.level t_value))
+      then Err.error err pos @@ "pointer cell levels must be equal: " ^L.to_string (T.level t_value) ^ " vs " ^ L.to_string (T.level t_dest)
+    );
+    checkAssignable ?self t_value t_dest err pos
+
+  | T.PATH t_value, T.PATH t_dest ->
+    if not (T.base t_value = T.ANY) then (
+      if not (L.flows_to (T.level t_value) (T.level t_dest) &&
+              L.flows_to (T.level t_dest) (T.level t_value))
+      then Err.error err pos @@ "path cell levels must be equal: " ^
+        L.to_string (T.level t_value) ^ " vs " ^ L.to_string (T.level t_dest)
+    );
     checkAssignable ?self t_value t_dest err pos
 
   | b1, b2 -> Err.error err pos @@ "cannot assign expression of type " ^ Ty.base_to_string b1 ^ " to variable of type " ^ Ty.base_to_string b2
@@ -197,7 +206,7 @@ let rec transExp ({err;_} as ctxt) =
       let (b,bty) = e_ty @@ trexp b in
       let base = T.PAIR (aty,bty) in
       PairExp (a,b) ^! T.Type{base;level=L.bottom}
-    | ArrayExp {data=arr;_} ->
+    | ArrayExp arr ->
       let ty = match arr with
       | hd::_ ->
         let _, ty = e_ty @@ transExp ctxt hd in
@@ -211,8 +220,16 @@ let rec transExp ({err;_} as ctxt) =
           e in
       let arr = List.map f arr in
       let base = T.ARRAY ty in
-      ArrayExp {data=arr} ^! T.Type{base;level=L.bottom}
+      ArrayExp arr ^! T.Type{base;level=L.bottom}
     | NilExp -> NilExp ^! _bot (T.POINTER (T.Type{base=T.ANY; level=L.bottom}))
+    | AllocExp p -> 
+      let e, ty = e_ty @@ trexp p in
+      AllocExp e ^! _bot (T.POINTER ty)
+    | OramExp p -> 
+      let e, ty = e_ty @@ trexp p in
+      OramExp e ^! (Ty.Type{base=(T.PATH ty);level=L.bottom})
+      
+
   in trexp
 and transVar ({err;_} as ctxt) =
   let rec trvar (A.Var{var_base;pos}) =
@@ -238,10 +255,15 @@ and transVar ({err;_} as ctxt) =
       | LOCAL -> SubscriptVar{var;exp} ^! t
       | STORE -> SubscriptVar{var;exp} ^@ t
       end
-    | A.HeapVar {var} ->
+    | HeapVar {var} ->
       let var, vty, _, loc = v_ty_lvl_loc @@ trvar var in
       let t = match T.base vty with
         | T.POINTER t ->
+          begin match T.base t with
+          | T.SELF -> vty
+          | _ -> t
+          end
+        | T.PATH t ->
           begin match T.base t with
           | T.SELF -> vty
           | _ -> t
@@ -360,28 +382,6 @@ let transCmd ({err;_} as ctxt) =
     | ExitCmd -> 
       checkLowPC pc err pos;
       fromBase ExitCmd, q
-    | AllocCmd {var; exp} ->
-      let var, varty, varloc = v_ty_loc @@ transVar ctxt var in
-      let e, ety = e_ty @@ transExp ctxt exp in
-
-      checkLowPC pc err pos;
-      checkWritable var varloc err pos;
-      let pointee_ty = match T.base varty with
-        | T.POINTER t -> t
-        | _ -> errTy err pos @@ "alloc target must be a pointer type, got: " ^ T.to_string varty in
-      checkAssignable ~self:varty ety pointee_ty err pos;
-      fromBase @@ AllocCmd{var; exp=e}, q
-    | OblivAllocCmd {var; exp} ->
-      let var, varty, varloc = v_ty_loc @@ transVar ctxt var in
-      let e, ety = e_ty @@ transExp ctxt exp in
-
-      checkWritable var varloc err pos;
-      let pointee_ty = match T.base varty with
-        | T.POINTER t -> t
-        | _ -> errTy err pos @@ "alloc target must be a pointer type, got: " ^ T.to_string varty in
-
-      checkAssignable ~self:varty ety pointee_ty err pos;
-      fromBase @@ OblivAllocCmd{var; exp=e}, q
   in trcmd
 
 let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
@@ -392,27 +392,23 @@ let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
     let init,initty = e_ty @@ transExp ctxt init in
     H.add gamma x ty;
     checkAssignable initty ty err pos;
-    VarDecl{x;ty;init;pos}
-  | A.VarDeclHeap {ty;x;init;pos} ->
-    (* TODO: Branch on public/private *)
-    (* Pointer cannot be more priviledged than the cell *)
-    let rec checkPtrLevels ptr_ty err pos =
-      match T.base ptr_ty with
+
+    (* check pointer is not more privileged than pointee *)
+    let rec checkPtrLevels ty =
+      match T.base ty with
       | T.POINTER cell ->
-        if not @@ L.flows_to (T.level ptr_ty) (T.level cell)
-        then Err.error err pos @@ "cell label must flow to pointer label";
-        checkPtrLevels cell err pos
-      | _ -> () in
+        if not @@ L.flows_to (T.level ty) (T.level cell)
+        then Err.error err pos @@ "pointer cannot be more privileged than pointee";
+        checkPtrLevels cell
+      | T.PATH cell ->
+        if not @@ L.flows_to (T.level ty) (T.level cell)
+        then Err.error err pos @@ "pointer cannot be more privileged than pointee";
+        checkPtrLevels cell
+      | _ -> ()
+    in
+    checkPtrLevels ty;
 
-    if H.mem gamma x
-    then Err.error err pos @@ "variable " ^ x ^ " already declared";       
-
-    checkPtrLevels ty err pos;
-    let init, initty, initlvl = e_ty_lvl @@ transExp ctxt init in
-    checkAssignable ~self:ty (T.Type{base=T.POINTER initty; level=initlvl}) ty err pos;
-    
-    H.add gamma x ty;
-    VarDeclHeap{x;ty;init;pos}
+    VarDecl{x;ty;init;pos}
   | A.NetworkChannelDecl {channel;level;potential;ty;pos} ->
     if H.mem lambda channel
     then Err.error err pos @@ "network channel " ^ Ch.to_string channel ^ " already declared";

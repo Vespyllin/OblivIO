@@ -62,13 +62,14 @@ rule token = parse
 | "int"               { INTTYPE }
 | "string"            { STRINGTYPE }
 | "ptr"               { PTRTYPE }
+| "path"              { PATHTYPE }
 | "err"               { ERRTYPE }
 | "input"             { INPUT }
 | "output"            { OUTPUT }
 | "exit"              { EXIT }
 | "alloc"             { ALLOC }
+| "oram"              { ORAM }
 | "array"             { ARRAY }
-| "read"              { READ }
 | "nil"               { NIL }
 | "_"                 { UNDERSCORE }
 | "??"                { COALESCE }

@@ -1,14 +1,17 @@
 TEST
 
-local channel STDOUT: string@{};
+local channel STDOUT: string@{h};
 
-var p: string@{}[]@{}[]@{} = [["HEY"]; ["HI"]];
-var c: string@{} = "C";
+var c: string@{h} = "Cad";
+var a: ptr(string@{h})@{h} = nil;
+var b: path(string@{h})@{h} = oram c;
 
 START@{} (ignored: int@{}) {
-    c = p[0][0];
+   a = alloc c;
+   *a ?= "A";
     
-    output(STDOUT, c);
+   output(STDOUT, *a);
+   // output(STDOUT, "ok");
 
     exit();
 }

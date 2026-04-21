@@ -7,6 +7,7 @@ type basetype =
   | PAIR of ty * ty
   | ARRAY of ty
   | POINTER of ty
+  | PATH of ty
   | ERROR 
   | ANY
   | ERR of ty

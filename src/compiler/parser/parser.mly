@@ -18,8 +18,8 @@
 %token AND OR ASSIGN BIND IF THEN ELSE WHILE DO
 %token SKIP OBLIF SEND INPUT OUTPUT
 %token INTTYPE STRINGTYPE
-%token PTRTYPE ERRTYPE UNDERSCORE
-%token ALLOC ARRAY NIL READ
+%token PTRTYPE ERRTYPE UNDERSCORE PATHTYPE
+%token ALLOC ORAM ARRAY NIL
 %token COALESCE
 
 %left OR
@@ -89,7 +89,11 @@ exp_base:
 | pair=paren(spair(exp,COMMA,exp))
   { PairExp pair }
 | arr=brack(slist(SEMICOLON,exp))
-  { ArrayExp {data=arr}}
+  { ArrayExp arr}
+| ALLOC exp=exp
+  { AllocExp exp }
+| ORAM exp=exp
+  { OramExp exp }
 
 exp:
 | e=exp_base          { Exp {exp_base=e; pos=$startpos} }
@@ -122,11 +126,6 @@ cmd_base:
   { SendCmd{channel;exp} }
 | EXIT LPAREN RPAREN SEMICOLON
   { ExitCmd }
-// Alloc
-| var=var ASSIGN ALLOC LPAREN exp=exp RPAREN SEMICOLON
-  { AllocCmd {var;exp} }
-| var=var BIND ALLOC LPAREN exp=exp RPAREN SEMICOLON
-  { OblivAllocCmd {var;exp} }
 
 cmd_seq:
 | c=cmd_base_seq
@@ -149,6 +148,8 @@ basetype:
   { T.ARRAY t }
 | PTRTYPE LPAREN t=type_at_lvl RPAREN
   { T.POINTER t }
+| PATHTYPE LPAREN t=type_at_lvl RPAREN
+  { T.PATH t }
 
 %inline type_at_lvl:
 | base=basetype AT level=lvl  { T.Type{base;level} }
@@ -172,8 +173,6 @@ potential:
 decl:
 | VAR x=ID ty=type_anno ASSIGN init=exp SEMICOLON
   { VarDecl {ty; x; init; pos=$startpos} }
-| VAR x=ID ty=type_anno ASSIGN ALLOC LPAREN init=exp RPAREN SEMICOLON
-  { VarDeclHeap {ty; x; init; pos=$startpos} }
 | NETWORK CHANNEL channel=channel AT level=lvl potential=potential ty=type_anno SEMICOLON
   { NetworkChannelDecl {ty; level; channel; potential; pos=$startpos(channel)} }
 | LOCAL CHANNEL ch=ID ty=type_anno SEMICOLON

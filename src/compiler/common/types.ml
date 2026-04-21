@@ -7,6 +7,7 @@ type basetype =
   | PAIR of ty * ty
   | ARRAY of ty
   | POINTER of ty
+  | PATH of ty
   | ERROR 
   | ANY
   | ERR of ty
@@ -35,6 +36,7 @@ let rec base_to_string = function
   | ARRAY t -> 
     to_string t ^ "[]"
   | POINTER t -> String.concat "" ["ptr("; to_string t; ")"]
+  | PATH t -> String.concat "" ["path("; to_string t; ")"]
   | ERROR -> "error"
   | ERR t -> "err(" ^ base_to_string (base t) ^ ")"
   | ANY -> "any"

@@ -6,6 +6,7 @@ module V = Common.Value
 module Ty = Common.Types
 module Tr = Common.Trace
 module C = Common.Channel
+module Heap = Common.Heap
 module ORAM = ORAM.Path_oram
 
 module H = Hashtbl
@@ -28,9 +29,8 @@ type context =
   ; mutable input_buffer: char array
   ; memory: (string, value) H.t
   ; store: (string, value) H.t
-  ; heap: (int, value) H.t
+  ; heap: Heap.t
   ; oram: ORAM.state
-  ; mutable next_address: int
   ; handlers: (string, handler_info) H.t
   ; trust_map: (C.channel, L.level * Ty.ty) H.t
   ; server: server_info
@@ -229,7 +229,7 @@ let safeSelect (bit: int) (orig: value) (upd: value) =
     | _ -> raise @@ InterpFatal ("safeSelect: " ^ (V.to_string orig) ^  ", " ^ (V.to_string upd)) in
   _S orig upd
 
-let rec get_error = function
+let get_error = function
   | IntVal {error; _} -> error
   | StringVal {error; _} -> error
   | PointerVal {error; _} -> error
@@ -326,7 +326,7 @@ let rec readvar ctxt =
         match access_elem, v with
         | [], _ -> v
         | (idx,lvl)::idx_tl, ArrayVal{length;data;_} ->
-          (* TODO: inherit elem size from parent array *)
+          (* Split into public and private vars. Private vars are fix size only *)
           let maxidx = length - 1 in
           let cnd1 = Bool.to_int(idx >= 0) in
           let cnd2 = Bool.to_int(idx > maxidx) in
@@ -335,11 +335,11 @@ let rec readvar ctxt =
           let res =
             if L.flows_to lvl L.bottom || ctxt.unsafe
               then if idx > maxidx then
-                (* TODO: OBLIVIATE *)
                 raise @@ InterpFatal "out of bounds"
               else
                 unwrap_indices idx_tl data.(idx)
             else 
+              (* We can just crash if length = 0, because size is public *)
               let len = Array.length data - 1 in
               let res = unwrap_indices idx_tl data.(0) in
               let a = ref res in
@@ -359,12 +359,20 @@ let rec readvar ctxt =
       _V ((i,lvl)::access_path) var
     | A.HeapVar {var} ->
       let ptr = _V access_path var in
-      let addr = match ptr with
-        | PointerVal{addr; _} -> addr
-        | _ -> raise @@ InterpFatal "HeapVar: not a pointer" in
-      match H.find_opt ctxt.heap addr with
-        | Some v -> v
-        | None -> raise @@ InterpFatal ("could not find pointer in heap")
+      (* TODO: err default *)
+      let error, addr, oram = match ptr with
+        | PointerVal{error; addr} -> error, addr, false
+        | PathVal{error; addr} -> error, addr, true
+        | _ -> raise @@ InterpFatal "HeapVar: not a pointer 1" in
+
+      if not oram then
+        (* public pointer: direct heap access *)
+        Heap.read ctxt.heap addr
+      else
+        (* private pointer *)
+        (* TODO: check oblivious *)
+        let x = ORAM.access ctxt.oram ~address:addr ~op:`Read in
+        StringVal{error=0; length=8; data=Array.of_seq(Bytes.to_seq x)}
 in _V []
 
 and writevar ctxt updkind upd mode =
@@ -426,17 +434,28 @@ and writevar ctxt updkind upd mode =
       let i = _int @@ eval ctxt exp in
       let lvl = Ty.level ty in
       _V ((i,lvl)::path) var
-    (* | A.HeapVar {var} -> *)
-    | A.HeapVar _ ->
-      (* let ptr = readvar ctxt var in
-      let error, addr = match ptr with
-        | PointerVal {error;addr} -> error,addr
-        | _ -> raise @@ InterpFatal "HeapVar: not a pointer" in *)
+    | A.HeapVar {var} ->
+      let error, addr, oram = match readvar ctxt var with
+      | PointerVal{error; addr} -> error, addr, false
+      | PathVal{error; addr} -> error, addr, true
+      | _ -> raise @@ InterpFatal "HeapVar: not a pointer 2" in
 
-      (* Add obliv logic mapping error or nil ptrs to the dummy address in ORAM if ptr is private, o/w throw error if nil *)
-      
-      raise @@ InterpFatal "Write HeapVar: NOT IMPL";
-      (* H.replace ctxt.heap addr upd *)
+        if not oram then(
+
+        if (error = 1 || addr = 0) then raise @@ InterpFatal "writeVar: Heap - writing to err/nil";
+        match updkind, ctxt.unsafe with
+          | BIND, false ->
+            let old_val = Heap.read ctxt.heap addr in
+            Heap.write ctxt.heap addr (safeSelect mode old_val upd)
+          | _ ->
+            if mode = 1 then Heap.write ctxt.heap addr upd;
+        ) else (
+            (* TODO: Convert to bytes *)
+            (* TODO: Case on BIND/ASSIGN *)
+            let _ = ORAM.access ctxt.oram ~address:addr ~op:(`Write (Bytes.make 5 'c')) in
+            ()
+            (* raise @@ InterpFatal "Write HeapVar: NOT IMPL 2" *)
+        )
       
 in _V []
 
@@ -469,13 +488,22 @@ and eval ctxt =
       else op oper v1 v2
     | A.PairExp (a,b) ->
       PairVal (_E a,_E b)
-    | A.ArrayExp {data=arr} ->
+    | A.ArrayExp arr ->
       let length = List.length arr in
       let data = arr |> List.map (fun e -> _E e) |> Array.of_list in
       ArrayVal {error=0;length;data}
     | A.NilExp -> 
-      let addr = -1 in
+      PointerVal{error=0;addr=0}
+    | A.AllocExp e ->
+      let v = _E e in
+      let addr = Heap.alloc ctxt.heap v in
       PointerVal{error=0;addr}
+    | A.OramExp e ->
+      let v = _E e in
+      (* TODO: add conversion to bytes, size check *)
+      let addr = ORAM.alloc ctxt.oram 'b' in
+      PathVal{error=0;addr}
+
   in _E
 
 exception Exit
@@ -610,23 +638,6 @@ let interpCmd ctxt =
       | [] -> raise @@ InterpFatal ("PopCmd: stack empty")
       | _ :: bitstack' -> bitstack'
       end
-    | AllocCmd {var; exp} ->
-      if bit = 1 then (
-        let v = eval ctxt exp in
-        let addr = ctxt.next_address in
-        H.add ctxt.heap addr v;
-        ctxt.next_address <- ctxt.next_address + 1;
-        writevar ctxt ASSIGN (PointerVal{ error=0;addr}) 1 var
-      );
-      bitstack
-    (* P: Branch on private/public*)
-    | OblivAllocCmd {var; exp} ->
-      let v = eval ctxt exp in
-      let addr = ctxt.next_address in
-      H.add ctxt.heap addr v;
-      ctxt.next_address <- ctxt.next_address + 1;
-      writevar ctxt BIND (PointerVal{ error=0;addr}) bit var;
-      bitstack
     | ExitCmd ->
       send ctxt (M.Goodbye {sender=ctxt.name});
       raise Exit
@@ -689,30 +700,20 @@ let interp ?(unsafe=false) print_when print_what (A.Prog{node;decls;hls}) =
     ; input_buffer = Array.make 256 '\000'
     ; memory = H.create 1024
     ; store = H.create 1024
-    ; heap = H.create 1024
+    ; heap = Heap.create ()
     ; oram = ORAM.create ~capacity:16 ~block_size:8 ~z:4
-    ; next_address = 0
     ; handlers = H.create 1024
     ; trust_map = H.create 1024
     ; server = {input;output}
     ; trace = Tr.empty_trace print_when print_what
     } in
+    
   let f (A.Hl{handler;x;body;_}) =
     H.add ctxt.handlers handler {x;body} in
   let g = function
     | (A.VarDecl{x;init;_}) ->
       let i = eval ctxt init in
       H.add ctxt.store x i
-
-    | (A.VarDeclHeap _) ->
-        (* | (A.VarDeclHeap{x;init;_}) -> *)
-      (* let v = eval ctxt init in
-      let addr = ctxt.next_address in *)
-      (* TODO: branch on public *)
-      (* H.add ctxt.heap addr v;
-      ctxt.next_address <- ctxt.next_address + 1;
-      H.add ctxt.store x (PointerVal{error=0;addr}) *)
-      raise @@ InterpFatal "VarDeclHeap: not impl"
     | (A.LocalChannelDecl _) ->
       ()
     | (A.NetworkChannelDecl{channel;ty;level;_}) ->

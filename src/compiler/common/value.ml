@@ -5,6 +5,7 @@ type value =
 | PairVal of value * value
 | ArrayVal of {error: int; length: int; data: value array}
 | PointerVal of {error: int; addr: int}
+| PathVal of {error: int; addr: int}
 
 let rec to_string = function
   | StringVal {error; length;data} ->
@@ -28,6 +29,9 @@ let rec to_string = function
   | PointerVal {error;addr} ->
       if error = 1 then "ErrPtr" else
       "ptr(" ^ string_of_int addr ^ ")" 
+  | PathVal {error;addr} ->
+      if error = 1 then "ErrPtr" else
+      "path(" ^ string_of_int addr ^ ")" 
 
 let rec size = function 
   | IntVal _                          ->    8
@@ -35,3 +39,4 @@ let rec size = function
   | PairVal (a,b)       ->    size a + size b 
   | ArrayVal {data;  _}  ->    8 + (8*Array.length data)
   | PointerVal _                      ->    8
+  | PathVal _                         ->    8
