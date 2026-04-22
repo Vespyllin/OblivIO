@@ -2,16 +2,14 @@ TEST
 
 local channel STDOUT: string@{h};
 
-var c: string@{h} = "Cad";
-var a: ptr(string@{h})@{h} = nil;
+var c: string@{h} = "5";
 var b: path(string@{h})@{h} = oram c;
 
 START@{} (ignored: int@{}) {
-   a = alloc c;
-   *a ?= "A";
+   output(STDOUT, *b);
+   *b ?= "12345123451234512345123451234";
     
-   output(STDOUT, *a);
-   // output(STDOUT, "ok");
+   output(STDOUT, *b);
 
     exit();
 }

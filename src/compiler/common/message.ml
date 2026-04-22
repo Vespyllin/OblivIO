@@ -29,7 +29,6 @@ let rec valueAux ladv (TypedVal{value;ty}) =
     ; valueAux ladv (TypedVal{value=b;ty=bt})
     ; ")"
     ]
-    (* P: is elem_size needed? *)
   | ArrayVal {length;data;_}, T.Type{base=ARRAY ty;level} when L.flows_to level ladv ->
     let datastr =
       data |> Array.to_list

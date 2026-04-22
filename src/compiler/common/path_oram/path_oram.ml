@@ -134,9 +134,16 @@ let create ~capacity ~block_size ~z =
 let alloc oram value =
   let address = oram.next_address in
   let block_size = oram.block_size in
-  let base_block = (Bytes.make block_size 'a') in 
-  (* TODO: safe select baseblock *)
-  let write = value in
-  ignore (access oram ~address:oram.next_address ~op:(`Write base_block));
+  let base_block = Bytes.make block_size '\x00' in
+  let value_bytes = Bytes.length value in
+
+  Bytes.blit value 0 base_block 0 value_bytes;
+  ignore (access oram ~address ~op:(`Write base_block));
   oram.next_address <- address + 1;
   address
+
+let read oram address =
+  access oram ~address:address ~op:`Read
+
+let write oram address data =
+    ignore(access oram ~address:address ~op:(`Write data))

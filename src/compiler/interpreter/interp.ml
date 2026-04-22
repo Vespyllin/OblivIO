@@ -162,53 +162,50 @@ let rec unsafeEq v1 v2 =
     end
   | _ -> raise @@ NotImplemented "unsafeEq"
 
-let safeSelect (bit: int) (orig: value) (upd: value) =
+  let safeSelect (bit: int) (orig: value) (upd: value) =
   let rec _S orig upd =
     match orig, upd with
     | IntVal {error=e1; value=v1}, IntVal {error=e2; value=v2} ->
-      let err = e1 lor e2 in
-      let not_err = 1 lxor err in
-      let value = not_err land (((bit lxor 1) * v1) lor (bit * v2)) in
+      let err = ((bit lxor 1) * e1) lor (bit * e2) in
+      let value = ((bit lxor 1) * v1) lor (bit * v2) in
       IntVal {error=err; value}
     | PointerVal {error=e1; addr=v1}, PointerVal {error=e2; addr=v2} ->
-      let err = e1 lor e2 in
-      let not_err = 1 lxor err in
-      let value = not_err land (((bit lxor 1) * v1) lor (bit * v2)) in
-      PointerVal {error=err; addr=value}
+      let err = ((bit lxor 1) * e1) lor (bit * e2) in
+      let addr = ((bit lxor 1) * v1) lor (bit * v2) in
+      PointerVal {error=err; addr}
     | StringVal{error=e1; length=l1; data=d1}, StringVal{error=e2; length=l2; data=d2} ->
-      let err = e1 lor e2 in
-      let not_err = 1 lxor err in
+      let err = ((bit lxor 1) * e1) lor (bit * e2) in
       begin
       match Array.length d1, Array.length d2 with
       | arrlen1, arrlen2 when arrlen1 < arrlen2 ->
-        let length = not_err land (((1 lxor bit)*l1) lor (bit*l2)) in
+        let length = ((1 lxor bit)*l1) lor (bit*l2) in
         let data = Array.copy d2 in
         for i = 0 to arrlen1-1 do
-          let i1 = not_err land (1 lxor bit) * (Char.code @@ d1.(i)) in
-          let i2 = not_err land bit * (Char.code @@ d2.(i)) in
+          let i1 = (1 lxor bit) * (Char.code @@ d1.(i)) in
+          let i2 = bit * (Char.code @@ d2.(i)) in
           data.(i) <- Char.chr @@ i1 lor i2
         done;
         for i = arrlen1 to arrlen2-1 do
-          data.(i) <- Char.chr @@ not_err land (bit * (Char.code @@ d2.(i)))
+          data.(i) <- Char.chr @@ bit * (Char.code @@ d2.(i))
         done;
         StringVal{error=err; length; data}
       | _, arrlen2 ->
-        let length = not_err land (((1 lxor bit)*l1) lor (bit*l2)) in
+        let length = ((1 lxor bit)*l1) lor (bit*l2) in
         let data = Array.copy d1 in
         for i = 0 to arrlen2-1 do
-          let i1 = not_err land (1 lxor bit) * (Char.code @@ d1.(i)) in
-          let i2 = not_err land bit * (Char.code @@ d2.(i)) in
+          let i1 = (1 lxor bit) * (Char.code @@ d1.(i)) in
+          let i2 = bit * (Char.code @@ d2.(i)) in
           data.(i) <- Char.chr @@ i1 lor i2
         done;
         for i = arrlen2 to Array.length d1-1 do
-          data.(i) <- Char.chr @@ not_err land ((1 lxor bit) * (Char.code @@ d1.(i)))
+          data.(i) <- Char.chr @@ (1 lxor bit) * (Char.code @@ d1.(i))
         done;
         StringVal{error=err; length; data}
       end
     | PairVal (a1,a2), PairVal (b1,b2) ->
       PairVal (_S a1 b1, _S a2 b2)
     | ArrayVal{error=e1; length=l1; data=d1}, ArrayVal{error=e2; length=l2; data=d2} ->
-      let err = e1 lor e2 in
+      let err = ((bit lxor 1) * e1) lor (bit * e2) in
       begin
       match Array.length d1, Array.length d2 with
       | arrlen1, arrlen2 when arrlen1 < arrlen2 ->
@@ -279,7 +276,6 @@ let op oper v1 v2 =
     safeSelect (get_error a) a b
   | _ -> raise @@ NotImplemented (V.to_string v1 ^ to_string oper ^ V.to_string v2)
 
-(* TODO: error handling *)
 let op_unsafe oper v1 v2 =
   match oper,v1,v2 with
   (* POLY *)
@@ -314,9 +310,105 @@ let op_unsafe oper v1 v2 =
   | CoalesceOp, a, _ -> a
   | _ -> raise @@ NotImplemented (V.to_string v1 ^ to_string oper ^ V.to_string v2)
   
+
+let rec to_bytes (v: value) : bytes =
+  let fixed_size = 11 in
+  match v with
+  | IntVal {error; value} ->
+    (* print_string "to_bytes: writing int\n"; *)
+    let b = Bytes.make fixed_size '\x00' in
+    (* type tag: 1 = int *)
+    Bytes.set_uint8 b 0 1;
+    Bytes.set_uint8 b 1 error;
+    Bytes.set_int64_be b 3 (Int64.of_int value);
+    b
+  | PointerVal {error; addr} ->
+    (* print_string "to_bytes: writing ptr\n"; *)
+    let b = Bytes.make fixed_size '\x00' in
+    (* type tag: 2 = pointer *)
+    Bytes.set_uint8 b 0 2;
+    Bytes.set_uint8 b 1 error;
+    Bytes.set_int64_be b 3 (Int64.of_int addr);
+    b
+  | PathVal {error; addr} ->
+    (* print_string "to_bytes: writing path\n"; *)
+    let b = Bytes.make fixed_size '\x00' in
+    (* type tag: 3 = path *)
+    Bytes.set_uint8 b 0 3;
+    Bytes.set_uint8 b 1 error;
+    Bytes.set_int64_be b 3 (Int64.of_int addr);
+    b
+  | StringVal {error; length; data} ->
+    (* print_string "to_bytes: writing str\n"; *)
+    let b = Bytes.make (3 + Array.length data) '\x00' in
+    (* type tag: 4 = string *)
+    Bytes.set_uint8 b 0 4;
+    Bytes.set_uint8 b 1 error;
+    Bytes.set_uint8 b 2 length;
+    Array.iteri (fun i c -> Bytes.set b (3 + i) c) data;
+    b
+  | ArrayVal {error; length; data} ->
+    (* print_string "to_bytes: writing array\n"; *)
+    (* encode each element and concatenate *)
+    let elems = Array.map to_bytes data in
+    let total = 3 + (Array.length data * fixed_size) in
+    let b = Bytes.make total '\x00' in
+    (* type tag: 5 = array *)
+    Bytes.set_uint8 b 0 5;
+    Bytes.set_uint8 b 1 error;
+    Bytes.set_uint8 b 2 length;
+    Array.iteri (fun i elem -> Bytes.blit elem 0 b (3 + i * fixed_size) fixed_size) elems;
+    b
+  | _ -> raise @@ InterpFatal "to_bytes: unsupported value type"
+
+  (* add type *)
+let rec from_bytes (target_type: Ty.basetype) (b: bytes) : value =
+  let tag = Bytes.get_uint8 b 0 in
+  let error = Bytes.get_uint8 b 1 in
+  match target_type with
+  | Ty.INT ->
+    let value = Int64.to_int (Bytes.get_int64_be b 3) in
+    let error = error lor (Bool.to_int (tag <> 1)) in
+    IntVal {error; value}
+  | Ty.POINTER _ ->
+    let addr = Int64.to_int (Bytes.get_int64_be b 3) in
+    let error = error lor (Bool.to_int (tag <> 2)) in
+    PointerVal {error; addr}
+  | Ty.PATH _ ->
+    let addr = Int64.to_int (Bytes.get_int64_be b 3) in
+    let error = error lor (Bool.to_int (tag <> 3)) in
+    PathVal {error; addr}
+  | Ty.STRING ->
+    let length = Bytes.get_uint8 b 2 in
+    let data_len = Bytes.length b - 3 in
+    let data = Array.init data_len (fun i -> Bytes.get b (3 + i)) in
+    let error = error lor (Bool.to_int (tag <> 4)) in
+    StringVal {error; length; data}
+  | Ty.ARRAY inner_ty ->
+    let length = Bytes.get_uint8 b 2 in
+    let num_elems = length in
+    let elem_size = (Bytes.length b - 3) / num_elems in
+    let data = Array.init num_elems (fun i ->
+      let elem = Bytes.sub b (3 + i * elem_size) elem_size in
+      from_bytes (Ty.base inner_ty) elem
+    ) in
+    let error = error lor (Bool.to_int (tag <> 5)) in
+    ArrayVal {error; length; data}
+  | _ -> raise @@ InterpFatal "from_bytes: unsupported target type"
+
+let get_byte_size (v: value) : int =
+  let fixed_size = 11 in
+  match v with
+  | IntVal _ -> fixed_size
+  | PointerVal _ -> fixed_size
+  | PathVal _ -> fixed_size
+  | StringVal {data; _} -> 3 + Array.length data
+  | ArrayVal {data; _} -> 3 + Array.length data * fixed_size
+  | _ -> raise @@ InterpFatal "get_byte_size: unsupported value type"
+
 type update = ASSIGN | BIND
 let rec readvar ctxt =
-  let rec _V access_path (A.Var{var_base;loc;_}) = match var_base with
+  let rec _V access_path (A.Var{var_base;loc;ty;_}) = match var_base with
     | A.SimpleVar x ->
       let v = 
         match loc with
@@ -364,15 +456,17 @@ let rec readvar ctxt =
         | PointerVal{error; addr} -> error, addr, false
         | PathVal{error; addr} -> error, addr, true
         | _ -> raise @@ InterpFatal "HeapVar: not a pointer 1" in
-
+      
+      let correct_addr = (((error lxor 1) * addr) lor (error * 0)) in
+      
       if not oram then
         (* public pointer: direct heap access *)
-        Heap.read ctxt.heap addr
+        Heap.read ctxt.heap correct_addr
       else
         (* private pointer *)
-        (* TODO: check oblivious *)
-        let x = ORAM.access ctxt.oram ~address:addr ~op:`Read in
-        StringVal{error=0; length=8; data=Array.of_seq(Bytes.to_seq x)}
+        let base = Ty.base ty in
+        let x = ORAM.read ctxt.oram correct_addr in
+        from_bytes base x 
 in _V []
 
 and writevar ctxt updkind upd mode =
@@ -436,27 +530,35 @@ and writevar ctxt updkind upd mode =
       _V ((i,lvl)::path) var
     | A.HeapVar {var} ->
       let error, addr, oram = match readvar ctxt var with
-      | PointerVal{error; addr} -> error, addr, false
-      | PathVal{error; addr} -> error, addr, true
-      | _ -> raise @@ InterpFatal "HeapVar: not a pointer 2" in
+        | PointerVal{error; addr} -> error, addr, false
+        | PathVal{error; addr} -> error, addr, true
+        | _ -> raise @@ InterpFatal "HeapVar: not a pointer" in
 
-        if not oram then(
-
+      if not oram then begin
         if (error = 1 || addr = 0) then raise @@ InterpFatal "writeVar: Heap - writing to err/nil";
         match updkind, ctxt.unsafe with
-          | BIND, false ->
-            let old_val = Heap.read ctxt.heap addr in
-            Heap.write ctxt.heap addr (safeSelect mode old_val upd)
-          | _ ->
-            if mode = 1 then Heap.write ctxt.heap addr upd;
-        ) else (
-            (* TODO: Convert to bytes *)
-            (* TODO: Case on BIND/ASSIGN *)
-            let _ = ORAM.access ctxt.oram ~address:addr ~op:(`Write (Bytes.make 5 'c')) in
-            ()
-            (* raise @@ InterpFatal "Write HeapVar: NOT IMPL 2" *)
-        )
-      
+        | BIND, false ->
+          let old_val = Heap.read ctxt.heap addr in
+          Heap.write ctxt.heap addr (safeSelect mode old_val upd)
+        | _ ->
+          if mode = 1 then Heap.write ctxt.heap addr upd
+      end else begin
+        let correct_addr = (((error lxor 1) * addr) lor (error * 0)) in
+        if (get_byte_size upd > ctxt.oram.block_size) then
+          raise @@ InterpFatal ("HeapWrite: Value too large. Attempted to write element of size " ^ string_of_int(get_byte_size upd) ^ " into block of size " ^ string_of_int(ctxt.oram.block_size));
+
+        match updkind, ctxt.unsafe with
+        | BIND, false ->
+          let A.Var{ty;_} = var in
+          let inner_ty = match Ty.base ty with
+            | Ty.PATH t | Ty.POINTER t -> Ty.base t
+            | _ -> raise @@ InterpFatal "HeapWrite: not a pointer type" in
+            
+          let old_val = from_bytes inner_ty (ORAM.read ctxt.oram correct_addr) in
+          ORAM.write ctxt.oram correct_addr (to_bytes (safeSelect mode old_val upd))
+        | _ ->
+          if mode = 1 then ORAM.write ctxt.oram correct_addr (to_bytes upd)
+      end
 in _V []
 
 and eval ctxt =
@@ -500,8 +602,9 @@ and eval ctxt =
       PointerVal{error=0;addr}
     | A.OramExp e ->
       let v = _E e in
-      (* TODO: add conversion to bytes, size check *)
-      let addr = ORAM.alloc ctxt.oram 'b' in
+      if (get_byte_size v > ctxt.oram.block_size) then 
+        raise @@ InterpFatal ("HeapWrite: Value too large. Attempted to write element of size " ^ string_of_int(get_byte_size v) ^ " into block of size " ^ string_of_int(ctxt.oram.block_size));
+      let addr = ORAM.alloc ctxt.oram (to_bytes v) in
       PathVal{error=0;addr}
 
   in _E
@@ -701,7 +804,7 @@ let interp ?(unsafe=false) print_when print_what (A.Prog{node;decls;hls}) =
     ; memory = H.create 1024
     ; store = H.create 1024
     ; heap = Heap.create ()
-    ; oram = ORAM.create ~capacity:16 ~block_size:8 ~z:4
+    ; oram = ORAM.create ~capacity:16 ~block_size:32 ~z:4
     ; handlers = H.create 1024
     ; trust_map = H.create 1024
     ; server = {input;output}
