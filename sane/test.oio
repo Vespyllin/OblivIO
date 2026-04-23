@@ -1,15 +1,27 @@
 TEST
 
 local channel STDOUT: string@{h};
+local channel INT: int@{h};
 
-var c: string@{h} = "5";
-var b: path(string@{h})@{h} = oram c;
+var c: ptr(int@{h}[]@{})@{} = alloc [5];
+
+var d1: int@{h}[]@{} = [5];
+var d2: int@{h}[]@{} = [5];
+
+var e1: int@{h} = 0;
+var e2: int@{h} = 0;
 
 START@{} (ignored: int@{}) {
-   output(STDOUT, *b);
-   *b ?= "12345123451234512345123451234";
+    d1 = *c;
+    e1 = d1[0];
+    output(INT, e1);
+
+    d1[0] = 6;
+    *c = d1;
     
-   output(STDOUT, *b);
+    d1 = *c;
+    e1 = d1[0];
+    output(INT, e1);
 
     exit();
 }

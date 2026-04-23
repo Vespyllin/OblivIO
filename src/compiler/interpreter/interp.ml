@@ -214,6 +214,10 @@ let rec unsafeEq v1 v2 =
         for i = 0 to arrlen1-1 do
           data.(i) <- _S d1.(i) d2.(i)
         done;
+        (* Set dummy err vals to 1 *)
+        (* for i = 0 to arrlen2-1 do *)
+          (* data.(i) <- _S d1.(i) d2.(i) *)
+        (* done; *)
         ArrayVal{error=err; length; data}
       | _, arrlen2 ->
         let length = ((1 lxor bit)*l1) lor (bit*l2) in
@@ -385,13 +389,11 @@ let rec from_bytes (target_type: Ty.basetype) (b: bytes) : value =
     let error = error lor (Bool.to_int (tag <> 4)) in
     StringVal {error; length; data}
   | Ty.ARRAY inner_ty ->
+    print_string "HERE \n";
     let length = Bytes.get_uint8 b 2 in
     let num_elems = length in
     let elem_size = (Bytes.length b - 3) / num_elems in
-    let data = Array.init num_elems (fun i ->
-      let elem = Bytes.sub b (3 + i * elem_size) elem_size in
-      from_bytes (Ty.base inner_ty) elem
-    ) in
+    let data = Array.init num_elems (fun i -> from_bytes (Ty.base inner_ty) (Bytes.sub b (3 + i * elem_size) elem_size)) in
     let error = error lor (Bool.to_int (tag <> 5)) in
     ArrayVal {error; length; data}
   | _ -> raise @@ InterpFatal "from_bytes: unsupported target type"
@@ -406,6 +408,31 @@ let get_byte_size (v: value) : int =
   | ArrayVal {data; _} -> 3 + Array.length data * fixed_size
   | _ -> raise @@ InterpFatal "get_byte_size: unsupported value type"
 
+let rec set_err (v: value) error : value =
+  match v with
+  | IntVal {value; _} -> IntVal {error; value}
+  | PointerVal {addr; _} -> PointerVal {error; addr}
+  | PathVal {addr; _} -> PathVal {error; addr}
+  | StringVal {length; data; _} -> StringVal {error; length; data}
+  | ArrayVal {length; data; _} -> ArrayVal {error; length; data}
+  | PairVal (a, b) -> PairVal (set_err a error, set_err b error)
+
+let rec get_error = function
+  | IntVal {error; _} -> error
+  | PointerVal {error; _} -> error
+  | PathVal {error; _} -> error
+  | StringVal {error; _} -> error
+  | ArrayVal {error; _} -> error
+  | PairVal (a, b) -> get_error a lor get_error b
+
+let rec deep_copy = function
+  | IntVal {error; value} -> IntVal {error; value}
+  | PointerVal {error; addr} -> PointerVal {error; addr}
+  | PathVal {error; addr} -> PathVal {error; addr}
+  | StringVal {error; length; data} -> StringVal {error; length; data = Array.copy data}
+  | ArrayVal {error; length; data} -> ArrayVal {error; length; data = Array.map deep_copy data}
+  | PairVal (a, b) -> PairVal (deep_copy a, deep_copy b)
+
 type update = ASSIGN | BIND
 let rec readvar ctxt =
   let rec _V access_path (A.Var{var_base;loc;ty;_}) = match var_base with
@@ -416,57 +443,56 @@ let rec readvar ctxt =
         | STORE -> lookup ctxt.store x in
       let rec unwrap_indices access_elem v =
         match access_elem, v with
-        | [], _ -> v
-        | (idx,lvl)::idx_tl, ArrayVal{length;data;_} ->
-          (* Split into public and private vars. Private vars are fix size only *)
-          let maxidx = length - 1 in
-          let cnd1 = Bool.to_int(idx >= 0) in
-          let cnd2 = Bool.to_int(idx > maxidx) in
-          let idx = cnd1 * idx in
-          let idx = ((cnd2 lxor 1) * idx) lor (cnd2 * maxidx) in
-          let res =
-            if L.flows_to lvl L.bottom || ctxt.unsafe
-              then if idx > maxidx then
-                raise @@ InterpFatal "out of bounds"
-              else
-                unwrap_indices idx_tl data.(idx)
-            else 
-              (* We can just crash if length = 0, because size is public *)
-              let len = Array.length data - 1 in
-              let res = unwrap_indices idx_tl data.(0) in
-              let a = ref res in
-              for i = 0 to len do
-                let b = unwrap_indices idx_tl data.(i) in
-                a := safeSelect (Bool.to_int (i lxor idx = 0)) !a b
-              done;
-              !a in  
-            res
+        | [], _ -> deep_copy v
+        | (idx,idx_lvl,arr_lvl)::idx_tl, ArrayVal{length;data;error} ->
+          if (L.flows_to idx_lvl L.bottom && L.flows_to arr_lvl L.bottom) || ctxt.unsafe
+            then if idx > length - 1 || idx < 0 then
+              raise @@ InterpFatal "ReadVar: indexing array out of bounds"
+            else
+              unwrap_indices idx_tl data.(idx)
+          else 
+            let len = Array.length data in
+            (* We can crash if length = 0, because size is public *)
+            if (len = 0) then raise @@ InterpFatal "ReadVar: indexing array of size/length 0";
+
+            let safe_value = ref (unwrap_indices idx_tl data.(0)) in
+            let elem_err = ref 0 in
+            for i = 0 to len-1 do
+              let right_idx = (Bool.to_int (i lxor idx = 0)) in
+              let rec_res = unwrap_indices idx_tl data.(i) in
+              safe_value := safeSelect right_idx !safe_value rec_res;
+              elem_err := (right_idx * get_error rec_res) lor (lnot right_idx * !elem_err)
+            done;
+
+            let new_err = Bool.to_int(idx >= length lor error lor !elem_err) in
+            set_err (!safe_value) new_err
+
         | _ -> raise @@ InterpFatal "readVar"
         in
       unwrap_indices access_path v
     | A.SubscriptVar {var;exp} ->
-      let A.Exp{ty;_} = exp in
+      let A.Exp{ty=index_ty;_} = exp in
       let i = _int @@ eval ctxt exp in
-      let lvl = Ty.level ty in
-      _V ((i,lvl)::access_path) var
+      let index_lvl = Ty.level index_ty in
+      let arr_lvl = Ty.level ty in
+      _V ((i, index_lvl, arr_lvl)::access_path) var
     | A.HeapVar {var} ->
       let ptr = _V access_path var in
-      (* TODO: err default *)
       let error, addr, oram = match ptr with
         | PointerVal{error; addr} -> error, addr, false
         | PathVal{error; addr} -> error, addr, true
         | _ -> raise @@ InterpFatal "HeapVar: not a pointer 1" in
       
-      let correct_addr = (((error lxor 1) * addr) lor (error * 0)) in
-      
-      if not oram then
+      if not oram then begin
         (* public pointer: direct heap access *)
-        Heap.read ctxt.heap correct_addr
-      else
-        (* private pointer *)
+        if (error = 1 || addr = 0) then raise @@ InterpFatal "readVar: Heap - reading from err/nil";
+        Heap.read ctxt.heap addr
+      end else begin
+        (* Private pointer, obliviate *)
+        let correct_addr = (((error lxor 1) * addr) lor (error * 0)) in
         let base = Ty.base ty in
-        let x = ORAM.read ctxt.oram correct_addr in
-        from_bytes base x 
+        from_bytes base (ORAM.read ctxt.oram correct_addr)
+      end
 in _V []
 
 and writevar ctxt updkind upd mode =
@@ -484,27 +510,24 @@ and writevar ctxt updkind upd mode =
           | _ -> if mode = 1 then 
             H.add ctxt.store x upd
           end
-        | [(i,lvl)], ArrayVal{length;data; _} ->
-          let maxidx = length -1 in
-          let cnd1 = Bool.to_int(i >= 0) in
-          let cnd2 = Bool.to_int(i > maxidx) in
-          let idx = cnd1 * i in
-          let idx = ((cnd2 lxor 1) * idx) lor (cnd2 * maxidx) in
-          if L.flows_to lvl L.bottom || ctxt.unsafe
-          then (* public index, no problem! *)
-            match updkind, ctxt.unsafe with
-            | BIND, false ->
-              data.(idx) <- safeSelect mode data.(idx) upd
-            | _ ->
-              (* TODO: careful in case of array overwrite *)
-              if mode = 1 then data.(idx) <- upd;
-          else 
-            (* non-public index, must obliv everything! *)
+        | [(idx,lvl)], ArrayVal{length;data; _} ->
+          (* TODO: careful in case of array overwrite *)
+          (* TODO: check also array level (public index+array) *)
+          if L.flows_to lvl L.bottom || ctxt.unsafe then (* public index *)
+            if idx > length - 1 || idx < 0 then
+              raise @@ InterpFatal "ReadVar: indexing array out of bounds"
+            else
+              match updkind, ctxt.unsafe with
+              | BIND, false ->
+                data.(idx) <- safeSelect mode data.(idx) upd
+              | _ ->
+                if mode = 1 then data.(idx) <- upd;
+            else (* non-public index *)
             let len = Array.length data - 1 in
             for i = 0 to len do
               let right_index = Bool.to_int (i lxor idx = 0) in
               data.(i) <- safeSelect (right_index land mode) data.(i) upd
-            done          
+            done
         | (i,lvl)::tl, ArrayVal{length;data; _} ->
           let maxidx = length -1 in
           let cnd1 = Bool.to_int(i >= 0) in
@@ -525,9 +548,9 @@ and writevar ctxt updkind upd mode =
       f path v mode
     | A.SubscriptVar {var;exp} ->
       let A.Exp{ty;_} = exp in
-      let i = _int @@ eval ctxt exp in
+      let idx = _int @@ eval ctxt exp in
       let lvl = Ty.level ty in
-      _V ((i,lvl)::path) var
+      _V ((idx,lvl)::path) var
     | A.HeapVar {var} ->
       let error, addr, oram = match readvar ctxt var with
         | PointerVal{error; addr} -> error, addr, false

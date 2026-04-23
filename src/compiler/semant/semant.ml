@@ -128,12 +128,12 @@ let rec checkAssignable ?self value dest err pos =
     checkAssignable ?self t_value t_dest err pos
 
   | T.PATH t_value, T.PATH t_dest ->
-    if not (T.base t_value = T.ANY) then (
+    (* if not (T.base t_value = T.ANY) then (
       if not (L.flows_to (T.level t_value) (T.level t_dest) &&
               L.flows_to (T.level t_dest) (T.level t_value))
       then Err.error err pos @@ "path cell levels must be equal: " ^
         L.to_string (T.level t_value) ^ " vs " ^ L.to_string (T.level t_dest)
-    );
+    ); *)
     checkAssignable ?self t_value t_dest err pos
 
   | b1, b2 -> Err.error err pos @@ "cannot assign expression of type " ^ Ty.base_to_string b1 ^ " to variable of type " ^ Ty.base_to_string b2
@@ -212,7 +212,6 @@ let rec transExp ({err;_} as ctxt) =
         let _, ty = e_ty @@ transExp ctxt hd in
         ty
       | [] ->
-        Err.error err pos "array literal cannot be empty";
         T.Type{base=Ty.ANY; level=L.bottom} in
         let f exp =
           let e,ety = e_ty @@ transExp ctxt exp in
@@ -244,16 +243,17 @@ and transVar ({err;_} as ctxt) =
         | STORE -> SimpleVar x ^@ ty
       end
     | SubscriptVar {var;exp} ->
-      let var,vty,vlvl,loc = v_ty_lvl_loc @@ trvar var in
+      let var,vty,_,loc = v_ty_lvl_loc @@ trvar var in
       let exp,ety,elvl = e_ty_lvl @@ transExp ctxt exp in
       checkInt ety err pos;
-      let t = match T.base vty with
-        | T.ARRAY t -> raiseTo t (L.lub vlvl elvl)
+      let cty = match T.base vty with
+        | T.ARRAY t -> if not (L.flows_to elvl (Ty.level t)) then errTy err pos @@ "index does not flow to array content level: " ^ T.to_string ety ^ " to " ^ T.to_string t else t 
         | _ -> errTy err pos @@ "variable type not an array type: " ^ T.to_string vty in
       begin
+  
       match loc with
-      | LOCAL -> SubscriptVar{var;exp} ^! t
-      | STORE -> SubscriptVar{var;exp} ^@ t
+      | LOCAL -> SubscriptVar{var;exp} ^! cty
+      | STORE -> SubscriptVar{var;exp} ^@ cty
       end
     | HeapVar {var} ->
       let var, vty, _, loc = v_ty_lvl_loc @@ trvar var in
@@ -393,21 +393,36 @@ let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
     H.add gamma x ty;
     checkAssignable initty ty err pos;
 
-    (* check pointer is not more privileged than pointee *)
+    let rec checkOramCompatibleTypes ?(strict=false) ty =
+      match T.base ty with
+      | T.INT -> ()
+      | T.PATH block ->
+        checkOramCompatibleTypes ~strict block
+      | T.STRING -> if strict then Err.error err pos "cannot pass in a variable size value to within an array in a path"
+      | T.ARRAY content -> checkOramCompatibleTypes ~strict:true content
+      | _ -> Err.error err pos "datatype is not supported in ORAM"
+    in
     let rec checkPtrLevels ty =
       match T.base ty with
       | T.POINTER cell ->
         if not @@ L.flows_to (T.level ty) (T.level cell)
         then Err.error err pos @@ "pointer cannot be more privileged than pointee";
         checkPtrLevels cell
-      | T.PATH cell ->
-        if not @@ L.flows_to (T.level ty) (T.level cell)
-        then Err.error err pos @@ "pointer cannot be more privileged than pointee";
-        checkPtrLevels cell
+      | T.PATH block ->
+        if L.flows_to (T.level ty) L.bottom
+        then Err.error err pos @@ "path cannot be public";
+
+        if not @@ L.flows_to (T.level ty) (T.level block) 
+        then Err.error err pos @@ "path cannot be more privileged than block";
+        checkPtrLevels block;
+        checkOramCompatibleTypes ty;
+        (* TODO: Restrict path types *)
+      | T.ARRAY content ->
+        if not @@ L.flows_to (T.level ty) (T.level content)
+        then Err.error err pos @@ "array content cannot be more privileged than array";
       | _ -> ()
     in
     checkPtrLevels ty;
-
     VarDecl{x;ty;init;pos}
   | A.NetworkChannelDecl {channel;level;potential;ty;pos} ->
     if H.mem lambda channel

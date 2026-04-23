@@ -131,19 +131,20 @@ let create ~capacity ~block_size ~z =
   ignore (access x ~address:0 ~op:(`Write (Bytes.make block_size '\x00')));
   { height; block_size; z; memory; position; next_address = 1; stash = [] }
 
-let alloc oram value =
-  let address = oram.next_address in
-  let block_size = oram.block_size in
-  let base_block = Bytes.make block_size '\x00' in
-  let value_bytes = Bytes.length value in
-
-  Bytes.blit value 0 base_block 0 value_bytes;
-  ignore (access oram ~address ~op:(`Write base_block));
-  oram.next_address <- address + 1;
-  address
-
 let read oram address =
   access oram ~address:address ~op:`Read
 
 let write oram address data =
-    ignore(access oram ~address:address ~op:(`Write data))
+  ignore(access oram ~address:address ~op:(`Write data))
+
+let alloc oram value =
+  let address = oram.next_address in
+  let block_size = oram.block_size in
+  let value_bytes = Bytes.length value in
+  
+  let base_block = Bytes.make block_size '\x00' in
+  Bytes.blit value 0 base_block 0 value_bytes;
+
+  write oram address base_block;
+  oram.next_address <- address + 1;
+  address
