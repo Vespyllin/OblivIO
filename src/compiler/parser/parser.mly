@@ -19,7 +19,7 @@
 %token SKIP OBLIF SEND INPUT OUTPUT
 %token INTTYPE STRINGTYPE
 %token PTRTYPE ERRTYPE UNDERSCORE PATHTYPE
-%token ALLOC ORAM ARRAY NIL
+%token ALLOC ORAM ARRAY NIL ONIL
 %token COALESCE
 
 %left OR
@@ -81,6 +81,7 @@ exp_base:
 | i=INT             { IntExp i }
 | s=STRING          { StringExp s }
 | NIL               { NilExp }
+| ONIL              { OnilExp }
 | v=var             { VarExp v }
 | SIZE e=paren(exp) { SizeExp e }
 | e=binop_exp       { e }
@@ -90,6 +91,8 @@ exp_base:
   { PairExp pair }
 | arr=brack(slist(SEMICOLON,exp))
   { ArrayExp arr}
+| ARRAY LPAREN length=INT COMMA value=exp RPAREN
+  { ArrayConstructorExp {value;length}}
 | ALLOC exp=exp
   { AllocExp exp }
 | ORAM exp=exp

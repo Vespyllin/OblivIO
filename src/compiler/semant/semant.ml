@@ -220,15 +220,18 @@ let rec transExp ({err;_} as ctxt) =
       let arr = List.map f arr in
       let base = T.ARRAY ty in
       ArrayExp arr ^! T.Type{base;level=L.bottom}
+    | ArrayConstructorExp {length;value} -> 
+      let e, ty = e_ty @@ transExp ctxt value in
+      let base = T.ARRAY ty in
+      ArrayExp (List.init length (fun _ -> e)) ^! T.Type{base;level=L.bottom}
     | NilExp -> NilExp ^! _bot (T.POINTER (T.Type{base=T.ANY; level=L.bottom}))
+    | OnilExp -> OnilExp ^! _bot (T.PATH (T.Type{base=T.ANY; level=L.bottom}))
     | AllocExp p -> 
       let e, ty = e_ty @@ trexp p in
       AllocExp e ^! _bot (T.POINTER ty)
     | OramExp p -> 
       let e, ty = e_ty @@ trexp p in
       OramExp e ^! (Ty.Type{base=(T.PATH ty);level=L.bottom})
-      
-
   in trexp
 and transVar ({err;_} as ctxt) =
   let rec trvar (A.Var{var_base;pos}) =

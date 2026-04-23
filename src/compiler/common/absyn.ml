@@ -26,13 +26,14 @@ and exp_base
   = IntExp of int
   | StringExp of string
   | NilExp
+  | OnilExp
   | VarExp of var
   | ProjExp of {proj: proj; exp:exp}
   | SizeExp of exp
   | OpExp of { left: exp; oper: oper; right: exp }
   | PairExp of (exp*exp)
   | ArrayExp of exp list
-  (* | ArrayConstructorExp of {value: exp; length: exp; elem_size: exp} *)
+  | ArrayConstructorExp of {value: exp; length: int}
   | AllocExp of exp
   | OramExp of exp
 

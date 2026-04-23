@@ -71,6 +71,7 @@ rule token = parse
 | "oram"              { ORAM }
 | "array"             { ARRAY }
 | "nil"               { NIL }
+| "onil"               { ONIL }
 | "_"                 { UNDERSCORE }
 | "??"                { COALESCE }
 | "//" nonnewline* '\n' { Lexing.new_line lexbuf; token lexbuf }

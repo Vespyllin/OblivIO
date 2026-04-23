@@ -119,6 +119,14 @@ let access oram ~address ~op =
 
   current_data
 
+
+
+let read oram address =
+  access oram ~address:address ~op:`Read
+
+let write oram address data =
+  ignore(access oram ~address:address ~op:(`Write data))
+
 let create ~capacity ~block_size ~z =
   assert (capacity >= 4 && capacity land (capacity - 1) = 0);
   assert (z >= 2);
@@ -127,15 +135,10 @@ let create ~capacity ~block_size ~z =
   let num_leaves = 1 lsl height in
   let memory     = Array.init capacity (fun _ -> Bucket.make_bucket ~z ~block_size) in
   let position   = Array.init capacity (fun _ -> first_leaf + Random.int num_leaves) in
-  let x = { height; block_size; z; memory; position; next_address = 0; stash = [] } in
-  ignore (access x ~address:0 ~op:(`Write (Bytes.make block_size '\x00')));
+  let state = { height; block_size; z; memory; position; next_address = 0; stash = [] } in
+  write state 0 (Bytes.make block_size '\x00');
+  (* ignore (access x ~address:0 ~op:(`Write (Bytes.make block_size '\x00'))); *)
   { height; block_size; z; memory; position; next_address = 1; stash = [] }
-
-let read oram address =
-  access oram ~address:address ~op:`Read
-
-let write oram address data =
-  ignore(access oram ~address:address ~op:(`Write data))
 
 let alloc oram value =
   let address = oram.next_address in

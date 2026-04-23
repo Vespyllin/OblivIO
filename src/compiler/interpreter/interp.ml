@@ -523,11 +523,13 @@ and writevar ctxt updkind upd mode =
               | _ ->
                 if mode = 1 then data.(idx) <- upd;
             else (* non-public index *)
-            let len = Array.length data - 1 in
-            for i = 0 to len do
-              let right_index = Bool.to_int (i lxor idx = 0) in
-              data.(i) <- safeSelect (right_index land mode) data.(i) upd
-            done
+              let len = Array.length data in
+              if (len = 0) then raise @@ InterpFatal "ReadVar: indexing array of size/length 0";
+
+              for i = 0 to len-1 do
+                let right_index = Bool.to_int (i lxor idx = 0) in
+                data.(i) <- safeSelect (right_index land mode) data.(i) upd
+              done
         | (i,lvl)::tl, ArrayVal{length;data; _} ->
           let maxidx = length -1 in
           let cnd1 = Bool.to_int(i >= 0) in
@@ -619,10 +621,12 @@ and eval ctxt =
       ArrayVal {error=0;length;data}
     | A.NilExp -> 
       PointerVal{error=0;addr=0}
-    | A.AllocExp e ->
-      let v = _E e in
-      let addr = Heap.alloc ctxt.heap v in
-      PointerVal{error=0;addr}
+      | A.AllocExp e ->
+        let v = _E e in
+        let addr = Heap.alloc ctxt.heap v in
+        PointerVal{error=0;addr}
+    | A.OnilExp -> 
+      PathVal{error=0;addr=0}
     | A.OramExp e ->
       let v = _E e in
       if (get_byte_size v > ctxt.oram.block_size) then 
