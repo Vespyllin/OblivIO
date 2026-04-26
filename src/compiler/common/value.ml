@@ -5,7 +5,7 @@ type value =
 | PairVal of value * value
 | ArrayVal of {error: int; length: int; data: value array}
 | PointerVal of {error: int; addr: int}
-| PathVal of {error: int; addr: int}
+| PathVal of {error: int; size: int; addr: int}
 
 let rec to_string = function
   | StringVal {error; length;data} ->

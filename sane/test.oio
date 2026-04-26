@@ -3,29 +3,12 @@ TEST
 local channel STDOUT: string@{h};
 local channel INT: int@{h};
 
-var test: string@{h}[]@{} = array(13, "!");
-
-var c: path(int@{h}[]@{h})@{h} = onil;
-
-var d1: int@{h}[]@{} = [1];
-var d2: int@{h}[]@{} = [2];
-
-var e1: int@{h} = 0;
-var e2: int@{h} = 0;
+var c: path(string@{h})[1]@{h} = onil 1;
 
 START@{} (ignored: int@{}) {
-    // d1 = *c;
-    // e1 = d1[0];
-    // output(INT, e1);
+    c = oram("ABCDEFGH", 1);
 
-    // d1[0] = 6;
-    // *c = d1;
-    
-    // d1 = *c;
-    // e1 = d1[0];
-    // output(INT, e1);
-    // output(INT, 5);
-    output(STDOUT, test[13]);
+    output(STDOUT, *c);
 
     exit();
 }

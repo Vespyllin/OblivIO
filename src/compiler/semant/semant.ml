@@ -127,13 +127,9 @@ let rec checkAssignable ?self value dest err pos =
     );
     checkAssignable ?self t_value t_dest err pos
 
-  | T.PATH t_value, T.PATH t_dest ->
-    (* if not (T.base t_value = T.ANY) then (
-      if not (L.flows_to (T.level t_value) (T.level t_dest) &&
-              L.flows_to (T.level t_dest) (T.level t_value))
-      then Err.error err pos @@ "path cell levels must be equal: " ^
-        L.to_string (T.level t_value) ^ " vs " ^ L.to_string (T.level t_dest)
-    ); *)
+  | T.PATH (t_value, s1), T.PATH (t_dest, s2) ->
+    if (s1 != s2) then Err.error err pos @@ "cannot assign paths of different sizes: " ^ string_of_int s1 ^ " with " ^ string_of_int s2;
+      
     checkAssignable ?self t_value t_dest err pos
 
   | b1, b2 -> Err.error err pos @@ "cannot assign expression of type " ^ Ty.base_to_string b1 ^ " to variable of type " ^ Ty.base_to_string b2
@@ -225,14 +221,15 @@ let rec transExp ({err;_} as ctxt) =
       let base = T.ARRAY ty in
       ArrayExp (List.init length (fun _ -> e)) ^! T.Type{base;level=L.bottom}
     | NilExp -> NilExp ^! _bot (T.POINTER (T.Type{base=T.ANY; level=L.bottom}))
-    | OnilExp -> OnilExp ^! _bot (T.PATH (T.Type{base=T.ANY; level=L.bottom}))
+    | OnilExp size -> OnilExp size ^! _bot (T.PATH ((T.Type{base=T.ANY; level=L.bottom}), size))
     | AllocExp p -> 
       let e, ty = e_ty @@ trexp p in
       AllocExp e ^! _bot (T.POINTER ty)
-    | OramExp p -> 
+    | OramExp{value=p; size=s} -> 
       let e, ty = e_ty @@ trexp p in
-      OramExp e ^! (Ty.Type{base=(T.PATH ty);level=L.bottom})
+      OramExp{value=e; size=s} ^! (Ty.Type{base=(T.PATH (ty, s));level=L.bottom})
   in trexp
+  
 and transVar ({err;_} as ctxt) =
   let rec trvar (A.Var{var_base;pos}) =
     let (^!) var_base ty = Var{var_base;loc=LOCAL;ty;pos} in
@@ -266,7 +263,7 @@ and transVar ({err;_} as ctxt) =
           | T.SELF -> vty
           | _ -> t
           end
-        | T.PATH t ->
+        | T.PATH (t, _) ->
           begin match T.base t with
           | T.SELF -> vty
           | _ -> t
@@ -399,10 +396,16 @@ let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
     let rec checkOramCompatibleTypes ?(strict=false) ty =
       match T.base ty with
       | T.INT -> ()
-      | T.PATH block ->
-        checkOramCompatibleTypes ~strict block
-      | T.STRING -> if strict then Err.error err pos "cannot pass in a variable size value to within an array in a path"
-      | T.ARRAY content -> checkOramCompatibleTypes ~strict:true content
+      | T.STRING -> 
+        if strict 
+          then Err.error err pos "cannot pass in a variable size value within an array in a path" 
+          else ()
+      | T.PATH (block, _) ->
+        checkOramCompatibleTypes block
+      | T.ARRAY content -> 
+        if strict 
+          then Err.error err pos "cannot pass in a variable size value within an array in a path"
+          else checkOramCompatibleTypes ~strict:true content
       | _ -> Err.error err pos "datatype is not supported in ORAM"
     in
     let rec checkPtrLevels ty =
@@ -411,7 +414,7 @@ let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
         if not @@ L.flows_to (T.level ty) (T.level cell)
         then Err.error err pos @@ "pointer cannot be more privileged than pointee";
         checkPtrLevels cell
-      | T.PATH block ->
+      | T.PATH (block, _) ->
         if L.flows_to (T.level ty) L.bottom
         then Err.error err pos @@ "path cannot be public";
 
@@ -419,7 +422,6 @@ let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
         then Err.error err pos @@ "path cannot be more privileged than block";
         checkPtrLevels block;
         checkOramCompatibleTypes ty;
-        (* TODO: Restrict path types *)
       | T.ARRAY content ->
         if not @@ L.flows_to (T.level ty) (T.level content)
         then Err.error err pos @@ "array content cannot be more privileged than array";

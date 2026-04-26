@@ -26,7 +26,7 @@ and exp_base
   = IntExp of int
   | StringExp of string
   | NilExp
-  | OnilExp
+  | OnilExp of int
   | VarExp of var
   | ProjExp of {proj: proj; exp:exp}
   | SizeExp of exp
@@ -35,7 +35,8 @@ and exp_base
   | ArrayExp of exp list
   | ArrayConstructorExp of {value: exp; length: int}
   | AllocExp of exp
-  | OramExp of exp
+  | OramExp of {value: exp; size: int}
+
 
 and cmd = Cmd of { cmd_base: cmd_base; pos: pos }
 and cmd_base

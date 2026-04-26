@@ -81,12 +81,12 @@ exp_base:
 | i=INT             { IntExp i }
 | s=STRING          { StringExp s }
 | NIL               { NilExp }
-| ONIL              { OnilExp }
 | v=var             { VarExp v }
 | SIZE e=paren(exp) { SizeExp e }
 | e=binop_exp       { e }
 | FST exp=exp       { ProjExp {proj=Fst; exp} }
 | SND exp=exp       { ProjExp {proj=Snd; exp} }
+| ONIL i=INT        { OnilExp i }
 | pair=paren(spair(exp,COMMA,exp))
   { PairExp pair }
 | arr=brack(slist(SEMICOLON,exp))
@@ -95,8 +95,8 @@ exp_base:
   { ArrayConstructorExp {value;length}}
 | ALLOC exp=exp
   { AllocExp exp }
-| ORAM exp=exp
-  { OramExp exp }
+| ORAM LPAREN exp=exp COMMA size=INT RPAREN
+  { OramExp{value=exp;size} }
 
 exp:
 | e=exp_base          { Exp {exp_base=e; pos=$startpos} }
@@ -151,8 +151,8 @@ basetype:
   { T.ARRAY t }
 | PTRTYPE LPAREN t=type_at_lvl RPAREN
   { T.POINTER t }
-| PATHTYPE LPAREN t=type_at_lvl RPAREN
-  { T.PATH t }
+| PATHTYPE LPAREN t=type_at_lvl RPAREN LBRACK s=INT RBRACK
+  { T.PATH (t, s) }
 
 %inline type_at_lvl:
 | base=basetype AT level=lvl  { T.Type{base;level} }

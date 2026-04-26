@@ -30,7 +30,7 @@ type context =
   ; memory: (string, value) H.t
   ; store: (string, value) H.t
   ; heap: Heap.t
-  ; oram: ORAM.state
+  ; oram: (int, ORAM.state) H.t
   ; handlers: (string, handler_info) H.t
   ; trust_map: (C.channel, L.level * Ty.ty) H.t
   ; server: server_info
@@ -334,12 +334,13 @@ let rec to_bytes (v: value) : bytes =
     Bytes.set_uint8 b 1 error;
     Bytes.set_int64_be b 3 (Int64.of_int addr);
     b
-  | PathVal {error; addr} ->
+  | PathVal {error; size; addr} ->
     (* print_string "to_bytes: writing path\n"; *)
     let b = Bytes.make fixed_size '\x00' in
     (* type tag: 3 = path *)
     Bytes.set_uint8 b 0 3;
     Bytes.set_uint8 b 1 error;
+    Bytes.set_uint8 b 2 size;
     Bytes.set_int64_be b 3 (Int64.of_int addr);
     b
   | StringVal {error; length; data} ->
@@ -365,7 +366,6 @@ let rec to_bytes (v: value) : bytes =
     b
   | _ -> raise @@ InterpFatal "to_bytes: unsupported value type"
 
-  (* add type *)
 let rec from_bytes (target_type: Ty.basetype) (b: bytes) : value =
   let tag = Bytes.get_uint8 b 0 in
   let error = Bytes.get_uint8 b 1 in
@@ -379,9 +379,10 @@ let rec from_bytes (target_type: Ty.basetype) (b: bytes) : value =
     let error = error lor (Bool.to_int (tag <> 2)) in
     PointerVal {error; addr}
   | Ty.PATH _ ->
+    let size = Int64.to_int (Bytes.get_int64_be b 2) in
     let addr = Int64.to_int (Bytes.get_int64_be b 3) in
     let error = error lor (Bool.to_int (tag <> 3)) in
-    PathVal {error; addr}
+    PathVal {error; size; addr}
   | Ty.STRING ->
     let length = Bytes.get_uint8 b 2 in
     let data_len = Bytes.length b - 3 in
@@ -389,7 +390,6 @@ let rec from_bytes (target_type: Ty.basetype) (b: bytes) : value =
     let error = error lor (Bool.to_int (tag <> 4)) in
     StringVal {error; length; data}
   | Ty.ARRAY inner_ty ->
-    print_string "HERE \n";
     let length = Bytes.get_uint8 b 2 in
     let num_elems = length in
     let elem_size = (Bytes.length b - 3) / num_elems in
@@ -412,7 +412,7 @@ let rec set_err (v: value) error : value =
   match v with
   | IntVal {value; _} -> IntVal {error; value}
   | PointerVal {addr; _} -> PointerVal {error; addr}
-  | PathVal {addr; _} -> PathVal {error; addr}
+  | PathVal {size;addr; _} -> PathVal {error; size; addr}
   | StringVal {length; data; _} -> StringVal {error; length; data}
   | ArrayVal {length; data; _} -> ArrayVal {error; length; data}
   | PairVal (a, b) -> PairVal (set_err a error, set_err b error)
@@ -428,7 +428,7 @@ let rec get_error = function
 let rec deep_copy = function
   | IntVal {error; value} -> IntVal {error; value}
   | PointerVal {error; addr} -> PointerVal {error; addr}
-  | PathVal {error; addr} -> PathVal {error; addr}
+  | PathVal {error; size; addr} -> PathVal {error; size; addr}
   | StringVal {error; length; data} -> StringVal {error; length; data = Array.copy data}
   | ArrayVal {error; length; data} -> ArrayVal {error; length; data = Array.map deep_copy data}
   | PairVal (a, b) -> PairVal (deep_copy a, deep_copy b)
@@ -478,9 +478,9 @@ let rec readvar ctxt =
       _V ((i, index_lvl, arr_lvl)::access_path) var
     | A.HeapVar {var} ->
       let ptr = _V access_path var in
-      let error, addr, oram = match ptr with
-        | PointerVal{error; addr} -> error, addr, false
-        | PathVal{error; addr} -> error, addr, true
+      let error, addr, size, oram = match ptr with
+        | PointerVal{error; addr} -> error, addr, 0, false
+        | PathVal{error; size; addr} -> error, addr, size, true
         | _ -> raise @@ InterpFatal "HeapVar: not a pointer 1" in
       
       if not oram then begin
@@ -489,9 +489,10 @@ let rec readvar ctxt =
         Heap.read ctxt.heap addr
       end else begin
         (* Private pointer, obliviate *)
+        if (H.find_opt ctxt.oram size = None) then H.add ctxt.oram size (ORAM.create ~capacity:16 ~block_size:((size*8) + 3) ~z:4);
         let correct_addr = (((error lxor 1) * addr) lor (error * 0)) in
         let base = Ty.base ty in
-        from_bytes base (ORAM.read ctxt.oram correct_addr)
+        from_bytes base (ORAM.read (H.find ctxt.oram size) correct_addr)
       end
 in _V []
 
@@ -554,9 +555,9 @@ and writevar ctxt updkind upd mode =
       let lvl = Ty.level ty in
       _V ((idx,lvl)::path) var
     | A.HeapVar {var} ->
-      let error, addr, oram = match readvar ctxt var with
-        | PointerVal{error; addr} -> error, addr, false
-        | PathVal{error; addr} -> error, addr, true
+      let error, addr, size, oram = match readvar ctxt var with
+        | PointerVal{error; addr} -> error, addr, 0, false
+        | PathVal{error; size;  addr} -> error, addr, size, true
         | _ -> raise @@ InterpFatal "HeapVar: not a pointer" in
 
       if not oram then begin
@@ -569,20 +570,26 @@ and writevar ctxt updkind upd mode =
           if mode = 1 then Heap.write ctxt.heap addr upd
       end else begin
         let correct_addr = (((error lxor 1) * addr) lor (error * 0)) in
-        if (get_byte_size upd > ctxt.oram.block_size) then
-          raise @@ InterpFatal ("HeapWrite: Value too large. Attempted to write element of size " ^ string_of_int(get_byte_size upd) ^ " into block of size " ^ string_of_int(ctxt.oram.block_size));
+        (* TODO *)
+        if (get_byte_size upd > (size * 8) + 3) then
+          raise @@ InterpFatal ("HeapWrite: Value too large. Attempted to write element of size " ^ string_of_int(get_byte_size upd) ^ " into block of size " ^ string_of_int(0));
+
+        if (H.find_opt ctxt.oram size = None) then H.add ctxt.oram size (ORAM.create ~capacity:16 ~block_size:((size*8) + 3) ~z:4);
 
         match updkind, ctxt.unsafe with
         | BIND, false ->
           let A.Var{ty;_} = var in
-          let inner_ty = match Ty.base ty with
-            | Ty.PATH t | Ty.POINTER t -> Ty.base t
+          let inner_ty, s = match Ty.base ty with
+            | Ty.PATH (t, s) -> Ty.base t, s
+            | Ty.POINTER t -> Ty.base t, 0
             | _ -> raise @@ InterpFatal "HeapWrite: not a pointer type" in
-            
-          let old_val = from_bytes inner_ty (ORAM.read ctxt.oram correct_addr) in
-          ORAM.write ctxt.oram correct_addr (to_bytes (safeSelect mode old_val upd))
+
+          print_string @@ string_of_int size ^ " " ^ string_of_int s ^ "\n";
+          
+          let old_val = from_bytes inner_ty (ORAM.read (H.find ctxt.oram size) correct_addr) in
+          ORAM.write (H.find ctxt.oram size) correct_addr (to_bytes (safeSelect mode old_val upd))
         | _ ->
-          if mode = 1 then ORAM.write ctxt.oram correct_addr (to_bytes upd)
+          if mode = 1 then ORAM.write (H.find ctxt.oram 0) correct_addr (to_bytes upd)
       end
 in _V []
 
@@ -625,15 +632,22 @@ and eval ctxt =
         let v = _E e in
         let addr = Heap.alloc ctxt.heap v in
         PointerVal{error=0;addr}
-    | A.OnilExp -> 
-      PathVal{error=0;addr=0}
-    | A.OramExp e ->
-      let v = _E e in
-      if (get_byte_size v > ctxt.oram.block_size) then 
-        raise @@ InterpFatal ("HeapWrite: Value too large. Attempted to write element of size " ^ string_of_int(get_byte_size v) ^ " into block of size " ^ string_of_int(ctxt.oram.block_size));
-      let addr = ORAM.alloc ctxt.oram (to_bytes v) in
-      PathVal{error=0;addr}
+    | A.OnilExp size -> 
+      PathVal{error=0; size; addr=0}
+    | A.OramExp{value=e; size} ->
+      if (size <= 0) then raise @@ InterpFatal ("ORAM: Size cannot be equal to or below 0. Size provided: " ^ string_of_int size);
 
+      let v = _E e in
+      let ptr_size = size*8 + 3 in
+
+      if (get_byte_size v > ptr_size) then 
+        raise @@ InterpFatal ("HeapWrite: Value too large. Attempted to write element of size " ^ string_of_int(get_byte_size v) ^ " into block of size " ^ string_of_int(ptr_size));
+
+      if (H.find_opt ctxt.oram size = None) then H.add ctxt.oram size (ORAM.create ~capacity:16 ~block_size:ptr_size ~z:4);
+
+      let addr = ORAM.alloc (H.find ctxt.oram size) (to_bytes v) in 
+      PathVal{error=0; size; addr}
+      
   in _E
 
 exception Exit
@@ -831,13 +845,16 @@ let interp ?(unsafe=false) print_when print_what (A.Prog{node;decls;hls}) =
     ; memory = H.create 1024
     ; store = H.create 1024
     ; heap = Heap.create ()
-    ; oram = ORAM.create ~capacity:16 ~block_size:32 ~z:4
+    ; oram = H.create 1024
     ; handlers = H.create 1024
     ; trust_map = H.create 1024
     ; server = {input;output}
     ; trace = Tr.empty_trace print_when print_what
     } in
-    
+
+  (* ORAM.create ~capacity:16 ~block_size:32 ~z:4 *)
+  H.add ctxt.oram 0 (ORAM.create ~capacity:16 ~block_size:0 ~z:4);
+
   let f (A.Hl{handler;x;body;_}) =
     H.add ctxt.handlers handler {x;body} in
   let g = function
