@@ -1,7 +1,7 @@
 type value =
   | IntVal of {error: int; value: int}
   | StringVal of {error: int; length: int; data: char array}
-  | PairVal of value * value
+  | PairVal of {error: int; data: (value * value)}
   | ArrayVal of {error: int; length: int; data: value array}
   | PointerVal of {error: int; addr: int}
   | PathVal of {error: int; size: int; addr: int}

@@ -1,16 +1,18 @@
 TEST
 
-local channel STDOUT: err(string@{h});
-local channel INT: int@{h};
+local channel PATH: err(path(_)[3]@{h});
+//local channel STR: err(string@{h});
+//local channel INT: err(int@{h});
 
-var c: path(string@{h})[1]@{h} = onil(1);
-var d: err(string@{h}) = "";
+//local channel T: err(path(_)[3]@{h});
+
+var c: path(_)[3]@{h} = onil(3);
+//var e: err(int@{h}) = 0;
 
 START@{} (ignored: int@{}) {
-    // c = oram("ABCDEFGH", 1);
-    d = *c;
-
-    output(STDOUT, d);
+    c = oram(onil(3), 3);
+    output(PATH, *c);
+  //  output(STR, "ok");
 
     exit();
 }

@@ -111,7 +111,8 @@ let rec checkAssignable ?self value dest err pos =
     begin match self with
     | Some t -> 
       checkAssignable ?self value t err pos
-    | None -> Err.error err pos @@ "SELF type used outside of recursive context"
+    | None -> 
+      Err.error err pos @@ "SELF type used outside of recursive context"
     end
   | T.INT, T.INT -> ()
   | T.STRING, T.STRING -> ()
@@ -121,13 +122,11 @@ let rec checkAssignable ?self value dest err pos =
   | T.ARRAY t_value, T.ARRAY t_dest ->
     checkAssignable ?self t_value t_dest err pos
   | T.POINTER t_value, T.POINTER t_dest ->
-    if not (T.base t_value = T.ANY) then (
-      if not (L.flows_to (T.level t_value) (T.level t_dest) && L.flows_to (T.level t_dest) (T.level t_value))
-      then Err.error err pos @@ "pointer cell levels must be equal: " ^L.to_string (T.level t_value) ^ " vs " ^ L.to_string (T.level t_dest)
-    );
+    if not (T.base t_value = T.ANY) && not (L.flows_to (T.level t_value) (T.level t_dest) && L.flows_to (T.level t_dest) (T.level t_value))
+      then Err.error err pos @@ "pointer cell levels must be equal: " ^L.to_string (T.level t_value) ^ " vs " ^ L.to_string (T.level t_dest);
     checkAssignable ?self t_value t_dest err pos
   | T.PATH (t_value, s1), T.PATH (t_dest, s2) ->
-    if (s1 != s2) then Err.error err pos @@ "cannot assign paths of different sizes: " ^ string_of_int s1 ^ " with " ^ string_of_int s2;
+    if (s1 != s2) then Err.error err pos @@ "cannot assign paths of different sizes: " ^ string_of_int s1 ^ " to " ^ string_of_int s2;
     checkAssignable ?self t_value t_dest err pos
 
   | b1, b2 -> Err.error err pos @@ "cannot assign expression of type " ^ Ty.base_to_string b1 ^ " to variable of type " ^ Ty.base_to_string b2
@@ -166,19 +165,13 @@ let rec transExp ({err;_} as ctxt) =
   
       let base, errable = match oper with
         | CoalesceOp ->
-            print_string "COAL\n";
-            print_string @@ "dest: " ^ Ty.to_string lty ^ "\n";
-            print_string @@ "val: " ^ Ty.to_string rty ^ "\n";
-            print_string @@ "lvl: " ^ L.to_string level ^ "\n";
           begin match Ty.errable lty, Ty.errable rty with
           | true, true ->
             checkAssignable lty rty err pos;
-            print_string @@ "1ret: " ^ Ty.base_to_string(Ty.base rty)  ^ "\n";
             Ty.base rty, true
           | true, _ ->
             (* Swap rty lty order to make the check go through *)
             checkAssignable rty lty err pos;
-            print_string @@ "2ret: " ^ Ty.to_string rty ^ " " ^ Ty.to_string lty  ^ "\n";
             Ty.base lty, false
           | _ ->
             Err.error err pos "left side of coalesce must be an errable type";
@@ -238,6 +231,7 @@ let rec transExp ({err;_} as ctxt) =
       let e, ty = e_ty @@ trexp p in
       OramExp{value=e; size=s} ^! Ty.Type{base=(T.PATH (ty, s));errable=false;level=L.bottom}
   in trexp
+
 and transVar ({err;_} as ctxt) =
   let rec trvar (A.Var{var_base;pos}) =
     let (^!) var_base ty = Var{var_base;loc=LOCAL;ty;pos} in
@@ -318,7 +312,7 @@ let transCmd ({err;_} as ctxt) =
         | STORE -> 
           checkLowPC pc err pos
       end;
-      checkAssignable ety varty err pos;
+      checkAssignable ~self:varty ety varty err pos;
       fromBase @@ AssignCmd{var;exp=e}, q
     | BindCmd {var;exp} ->
       let var,varty,varloc = v_ty_loc @@ transVar ctxt var in
@@ -401,21 +395,30 @@ let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
     then Err.error err pos @@ "variable " ^ x ^ " already declared";
     let init,initty = e_ty @@ transExp ctxt init in
     H.add gamma x ty;
-    checkAssignable initty ty err pos;
+    checkAssignable ~self:ty initty ty err pos;
 
     let rec checkOramCompatibleTypes ?(strict=false) ty =
+      let errmsg = "cannot pass in a variable size value within an array/pair in a path" in
       match T.base ty with
       | T.INT -> ()
       | T.STRING -> 
         if strict 
-          then Err.error err pos "cannot pass in a variable size value within an array in a path" 
+          then Err.error err pos errmsg
           else ()
       | T.PATH (block, _) ->
         checkOramCompatibleTypes block
       | T.ARRAY content -> 
         if strict 
-          then Err.error err pos "cannot pass in a variable size value within an array in a path"
+          then Err.error err pos errmsg
           else checkOramCompatibleTypes ~strict:true content
+      | T.PAIR (a, b) -> 
+          if strict 
+          then Err.error err pos errmsg
+          else begin
+            checkOramCompatibleTypes ~strict:true a; 
+            checkOramCompatibleTypes ~strict:true b
+          end
+      | T.SELF -> ()
       | _ -> Err.error err pos "datatype is not supported in ORAM"
     in
     let rec checkPtrLevels ty =
@@ -428,17 +431,21 @@ let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
         if L.flows_to (T.level ty) L.bottom
         then Err.error err pos @@ "path cannot be public";
 
-        if not @@ L.flows_to (T.level ty) (T.level block) 
-        then Err.error err pos @@ "path cannot be more privileged than block";
-        checkPtrLevels block;
+        begin match T.base block with
+        | T.SELF -> ()
+        | _ ->
+          if not @@ L.flows_to (T.level ty) (T.level block) 
+          then Err.error err pos @@ "path cannot be more privileged than block";
+          checkPtrLevels block;
+          end;
         checkOramCompatibleTypes ty;
       | T.ARRAY content ->
         if not @@ L.flows_to (T.level ty) (T.level content)
         then Err.error err pos @@ "array content cannot be more privileged than array";
+      | T.SELF -> ()
       | _ -> ()
     in
     checkPtrLevels ty;
-    (* print_string @@ "DeclType: " ^ (Ty.to_string ty) ^ "\n"; *)
     VarDecl{x;ty;init;pos}
   | A.NetworkChannelDecl {channel;level;potential;ty;pos} ->
     if H.mem lambda channel

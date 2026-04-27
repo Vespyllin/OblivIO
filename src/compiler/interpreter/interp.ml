@@ -117,8 +117,8 @@ let rec safeEq v1 v2 =
     Bool.to_int (!mismatch = 0)
   | PointerVal {error=e1; addr=a1}, PointerVal {error=e2; addr=a2} -> 
     Bool.to_int(a1 lxor a2 = 0) land (e1 lxor 1) land (e2 lxor 1)
-  | PairVal(a1,a2), PairVal (b1,b2) ->
-    safeEq a1 b1 * safeEq a2 b2
+  | PairVal{error=e1; data=(a1,a2)}, PairVal{error=e2; data=(b1,b2)} ->
+    (safeEq a1 b1 * safeEq a2 b2) land (1 lxor (e1 lor e2))
   | ArrayVal{error=e1;length=l1;data=d1;_}, ArrayVal{error=e2;length=l2;data=d2;_} ->
     let mismatch = ref (l1 lxor l2 lor e1 lor e2)  in
     let publen = min (Array.length d1) (Array.length d2) in
@@ -147,7 +147,8 @@ let rec unsafeEq v1 v2 =
       1
     with Unequal -> 0
     end
-  | PairVal(a1,a2), PairVal (b1,b2) ->
+  | PairVal{data=(a1,a2);_}, PairVal {data=(b1,b2);_} ->
+    (* TODO: fix? *)
     unsafeEq a1 b1 * safeEq a2 b2
   | ArrayVal{length=l1;data=d1;_}, ArrayVal{length=l2;data=d2;_} ->
     begin
@@ -202,8 +203,9 @@ let rec unsafeEq v1 v2 =
         done;
         StringVal{error=err; length; data}
       end
-    | PairVal (a1,a2), PairVal (b1,b2) ->
-      PairVal (_S a1 b1, _S a2 b2)
+    | PairVal{error=e1;data=(a1,a2)}, PairVal{error=e2;data=(b1,b2)} ->
+      let err = ((bit lxor 1) * e1) lor (bit * e2) in
+      PairVal{error=err;data=(_S a1 b1, _S a2 b2)}
     | ArrayVal{error=e1; length=l1; data=d1}, ArrayVal{error=e2; length=l2; data=d2} ->
       let err = ((bit lxor 1) * e1) lor (bit * e2) in
       begin
@@ -214,7 +216,7 @@ let rec unsafeEq v1 v2 =
         for i = 0 to arrlen1-1 do
           data.(i) <- _S d1.(i) d2.(i)
         done;
-        (* Set dummy err vals to 1 *)
+        (* TODO: Set dummy err vals to 0? *)
         (* for i = 0 to arrlen2-1 do *)
           (* data.(i) <- _S d1.(i) d2.(i) *)
         (* done; *)
@@ -313,7 +315,6 @@ let op_unsafe oper v1 v2 =
     StringVal {error=e1 lor e2; length=l1+l2; data=Array.append d1' d2'}
   | CoalesceOp, a, _ -> a
   | _ -> raise @@ NotImplemented (V.to_string v1 ^ to_string oper ^ V.to_string v2)
-  
 
 let rec to_bytes (v: value) : bytes =
   let fixed_size = 11 in
@@ -325,14 +326,6 @@ let rec to_bytes (v: value) : bytes =
     Bytes.set_uint8 b 0 1;
     Bytes.set_uint8 b 1 error;
     Bytes.set_int64_be b 3 (Int64.of_int value);
-    b
-  | PointerVal {error; addr} ->
-    (* print_string "to_bytes: writing ptr\n"; *)
-    let b = Bytes.make fixed_size '\x00' in
-    (* type tag: 2 = pointer *)
-    Bytes.set_uint8 b 0 2;
-    Bytes.set_uint8 b 1 error;
-    Bytes.set_int64_be b 3 (Int64.of_int addr);
     b
   | PathVal {error; size; addr} ->
     (* print_string "to_bytes: writing path\n"; *)
@@ -353,7 +346,6 @@ let rec to_bytes (v: value) : bytes =
     Array.iteri (fun i c -> Bytes.set b (3 + i) c) data;
     b
   | ArrayVal {error; length; data} ->
-    (* print_string "to_bytes: writing array\n"; *)
     (* encode each element and concatenate *)
     let elems = Array.map to_bytes data in
     let total = 3 + (Array.length data * fixed_size) in
@@ -363,6 +355,16 @@ let rec to_bytes (v: value) : bytes =
     Bytes.set_uint8 b 1 error;
     Bytes.set_uint8 b 2 length;
     Array.iteri (fun i elem -> Bytes.blit elem 0 b (3 + i * fixed_size) fixed_size) elems;
+    b
+  | PairVal {error; data=(v1, v2)} ->
+    let v1d = to_bytes v1 in
+    let v2d = to_bytes v2 in
+    let total = 3 + (2 * fixed_size) in
+    let b = Bytes.make total '\x00' in
+    Bytes.set_uint8 b 0 6;
+    Bytes.set_uint8 b 1 error;
+    Bytes.blit v1d 0 b 3 (Bytes.length v1d);
+    Bytes.blit v2d 0 b (3 + (Bytes.length v1d)) (Bytes.length v2d);
     b
   | _ -> raise @@ InterpFatal "to_bytes: unsupported value type"
 
@@ -374,12 +376,10 @@ let rec from_bytes (target_type: Ty.basetype) (b: bytes) : value =
     let value = Int64.to_int (Bytes.get_int64_be b 3) in
     let error = error lor (Bool.to_int (tag <> 1)) in
     IntVal {error; value}
-  | Ty.POINTER _ ->
-    let addr = Int64.to_int (Bytes.get_int64_be b 3) in
-    let error = error lor (Bool.to_int (tag <> 2)) in
-    PointerVal {error; addr}
-  | Ty.PATH _ ->
-    let size = Int64.to_int (Bytes.get_int64_be b 2) in
+  | Ty.PATH (_, s) ->
+    (* let acq_size = Bytes.get_uint8 b 2 in *)
+    (* if (acq_size != size) then raise @@ InterpFatal ("pointer sizes got mixed up. reading ptr of block size " ^ string_of_int acq_size ^ " when trying to deref ptr of block size" ^ string_of_int s); *)
+    let size = s in
     let addr = Int64.to_int (Bytes.get_int64_be b 3) in
     let error = error lor (Bool.to_int (tag <> 3)) in
     PathVal {error; size; addr}
@@ -392,10 +392,14 @@ let rec from_bytes (target_type: Ty.basetype) (b: bytes) : value =
   | Ty.ARRAY inner_ty ->
     let length = Bytes.get_uint8 b 2 in
     let num_elems = length in
-    let elem_size = (Bytes.length b - 3) / num_elems in
-    let data = Array.init num_elems (fun i -> from_bytes (Ty.base inner_ty) (Bytes.sub b (3 + i * elem_size) elem_size)) in
+    let data = Array.init num_elems (fun i -> from_bytes (Ty.base inner_ty) (Bytes.sub b (3 + i * 11) 11)) in
     let error = error lor (Bool.to_int (tag <> 5)) in
     ArrayVal {error; length; data}
+  | Ty.PAIR (v1, v2) ->
+    let error = error lor (Bool.to_int (tag <> 6)) in
+    let v1d =  from_bytes (Ty.base v1) (Bytes.sub b 3 11) in
+    let v2d =  from_bytes (Ty.base v2) (Bytes.sub b (3 + 11) 11) in
+    PairVal {error; data=(v1d,v2d)}
   | _ -> raise @@ InterpFatal "from_bytes: unsupported target type"
 
 let get_byte_size (v: value) : int =
@@ -404,9 +408,9 @@ let get_byte_size (v: value) : int =
   | IntVal _ -> fixed_size
   | PointerVal _ -> fixed_size
   | PathVal _ -> fixed_size
+  | PairVal _ -> 3 + 2 * fixed_size
   | StringVal {data; _} -> 3 + Array.length data
   | ArrayVal {data; _} -> 3 + Array.length data * fixed_size
-  | _ -> raise @@ InterpFatal "get_byte_size: unsupported value type"
 
 let rec set_err (v: value) error : value =
   match v with
@@ -415,7 +419,7 @@ let rec set_err (v: value) error : value =
   | PathVal {size;addr; _} -> PathVal {error; size; addr}
   | StringVal {length; data; _} -> StringVal {error; length; data}
   | ArrayVal {length; data; _} -> ArrayVal {error; length; data}
-  | PairVal (a, b) -> PairVal (set_err a error, set_err b error)
+  | PairVal{data;_} -> PairVal{error; data}
 
 let rec get_error = function
   | IntVal {error; _} -> error
@@ -423,7 +427,7 @@ let rec get_error = function
   | PathVal {error; _} -> error
   | StringVal {error; _} -> error
   | ArrayVal {error; _} -> error
-  | PairVal (a, b) -> get_error a lor get_error b
+  | PairVal{error;_} -> error
 
 let rec deep_copy = function
   | IntVal {error; value} -> IntVal {error; value}
@@ -431,7 +435,7 @@ let rec deep_copy = function
   | PathVal {error; size; addr} -> PathVal {error; size; addr}
   | StringVal {error; length; data} -> StringVal {error; length; data = Array.copy data}
   | ArrayVal {error; length; data} -> ArrayVal {error; length; data = Array.map deep_copy data}
-  | PairVal (a, b) -> PairVal (deep_copy a, deep_copy b)
+  | PairVal{error;data=(a, b)} -> PairVal{error;data=(deep_copy a, deep_copy b)}
 
 type update = ASSIGN | BIND
 let rec readvar ctxt =
@@ -607,8 +611,8 @@ and eval ctxt =
       let v = _E exp in
       begin
         match proj,v with
-        | A.Fst, PairVal (a,_) -> a
-        | A.Snd, PairVal (_,b) -> b
+        | A.Fst, PairVal{error; data=(a,_)} -> set_err a error
+        | A.Snd, PairVal{error; data=(_,b)} -> set_err b error
         | _ -> raise @@ InterpFatal __LOC__
       end
     | A.SizeExp exp ->
@@ -621,7 +625,7 @@ and eval ctxt =
       then op_unsafe oper v1 v2
       else op oper v1 v2
     | A.PairExp (a,b) ->
-      PairVal (_E a,_E b)
+      PairVal{error=0;data=(_E a,_E b)}
     | A.ArrayExp arr ->
       let length = List.length arr in
       let data = arr |> List.map (fun e -> _E e) |> Array.of_list in
@@ -853,7 +857,7 @@ let interp ?(unsafe=false) print_when print_what (A.Prog{node;decls;hls}) =
     } in
 
   (* ORAM.create ~capacity:16 ~block_size:32 ~z:4 *)
-  H.add ctxt.oram 0 (ORAM.create ~capacity:16 ~block_size:0 ~z:4);
+  (* H.add ctxt.oram 0 (ORAM.create ~capacity:16 ~block_size:0 ~z:4); *)
 
   let f (A.Hl{handler;x;body;_}) =
     H.add ctxt.handlers handler {x;body} in

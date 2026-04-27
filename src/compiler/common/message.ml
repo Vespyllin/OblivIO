@@ -21,7 +21,7 @@ let rec valueAux ladv (TypedVal{value;ty}) =
   match value,ty with
   | IntVal _, T.Type{base=INT;level} when L.flows_to level ladv -> V.to_string value
   | StringVal _, T.Type{base=STRING;level} when L.flows_to level ladv -> V.to_string value
-  | PairVal (a,b), T.Type{base=PAIR (at,bt);level} when L.flows_to level ladv ->
+  | PairVal {data=(a,b);_}, T.Type{base=PAIR (at,bt);level} when L.flows_to level ladv ->
     String.concat "" [
       "("
     ; valueAux ladv (TypedVal{value=a;ty=at})
