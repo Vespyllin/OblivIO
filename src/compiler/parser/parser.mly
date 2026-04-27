@@ -86,7 +86,8 @@ exp_base:
 | e=binop_exp       { e }
 | FST exp=exp       { ProjExp {proj=Fst; exp} }
 | SND exp=exp       { ProjExp {proj=Snd; exp} }
-| ONIL i=INT        { OnilExp i }
+| ONIL LPAREN i=INT RPAREN        
+  { OnilExp i }
 | pair=paren(spair(exp,COMMA,exp))
   { PairExp pair }
 | arr=brack(slist(SEMICOLON,exp))
@@ -155,12 +156,12 @@ basetype:
   { T.PATH (t, s) }
 
 %inline type_at_lvl:
-| base=basetype AT level=lvl  { T.Type{base;level} }
-| UNDERSCORE                  { T.Type{base=T.SELF; level=L.bottom} }
+| base=basetype AT level=lvl  { T.Type{base;errable=false;level} }
+| UNDERSCORE                  { T.Type{base=T.SELF; errable=false; level=L.bottom} }
 
 %inline type_anno:
 | COLON t=type_at_lvl  { t }
-| COLON ERRTYPE LPAREN t=type_at_lvl RPAREN { T.Type{base=T.ERR t; level=L.bottom} }
+| COLON ERRTYPE LPAREN t=type_at_lvl RPAREN { T.Type{base=T.base t; errable=true; level=T.level t} }
 
 
 channel:

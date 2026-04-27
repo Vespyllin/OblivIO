@@ -1,14 +1,16 @@
 TEST
 
-local channel STDOUT: string@{h};
+local channel STDOUT: err(string@{h});
 local channel INT: int@{h};
 
-var c: path(string@{h})[1]@{h} = onil 1;
+var c: path(string@{h})[1]@{h} = onil(1);
+var d: err(string@{h}) = "";
 
 START@{} (ignored: int@{}) {
-    c = oram("ABCDEFGH", 1);
+    // c = oram("ABCDEFGH", 1);
+    d = *c;
 
-    output(STDOUT, *c);
+    output(STDOUT, d);
 
     exit();
 }

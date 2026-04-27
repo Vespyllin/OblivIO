@@ -85,7 +85,7 @@ let start json_file =
         if ST.is_empty !clients then (
           let open Common.Value in
           let lbit = M.Lbit{bit=1;level=Common.Level.bottom} in
-          let tvalue = M.TypedVal{value=IntVal{error=0; value=0};ty=Ty.Type{base=Ty.INT;level=L.bottom}} in
+          let tvalue = M.TypedVal{value=IntVal{error=0; value=0};ty=Ty.Type{base=Ty.INT;errable=false;level=L.bottom}} in
           H.iter (fun node ch ->
             let msg = M.Relay{sender="OBLIVIO";channel=C.Ch{node;handler="START"};lbit;tvalue} in
             output_value ch msg;

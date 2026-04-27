@@ -29,9 +29,9 @@ let rec to_string = function
   | PointerVal {error;addr} ->
       if error = 1 then "ErrPtr" else
       "ptr(" ^ string_of_int addr ^ ")" 
-  | PathVal {error;addr} ->
+  | PathVal {error;size;addr} ->
       if error = 1 then "ErrPtr" else
-      "path(" ^ string_of_int addr ^ ")" 
+      "path(" ^ string_of_int addr ^ ")[" ^ string_of_int size ^ "]" 
 
 let rec size = function 
   | IntVal _                          ->    8

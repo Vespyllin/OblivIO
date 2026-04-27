@@ -20,10 +20,10 @@ type context
 ;;
 
 let _bot base =
-  Ty.Type{base;level=L.bottom}
+  Ty.Type{base;errable=false;level=L.bottom}
 
-let raiseTo (T.Type{base;level}) lvl =
-  T.Type{base;level=L.lub level lvl}
+let raiseTo (T.Type{base;errable;level}) lvl =
+  T.Type{base;errable;level=L.lub level lvl}
 
 let errLvl err pos msg =
   Err.error err pos @@ msg;
@@ -31,7 +31,7 @@ let errLvl err pos msg =
 
 let errTy err pos msg =
   Err.error err pos @@ msg;
-  _bot Ty.ERROR
+  _bot Ty.CRASH
 
 let lookupVar ({gamma;delta;err;_}) v pos = 
   match H.find_opt delta v with
@@ -61,8 +61,8 @@ let v_ty_lvl_loc (Var{ty;loc;_} as v) = (v,ty,T.level ty,loc)
 
 let rec isSameBase t1 t2 =
   match Ty.base t1, Ty.base t2 with
-  | Ty.ERROR, _ -> true
-  | _, Ty.ERROR -> true
+  | Ty.CRASH, _ -> true
+  | _, Ty.CRASH -> true
   | T.INT, T.INT -> true
   | T.STRING, T.STRING -> true
   | T.PAIR (a1,a2), T.PAIR (b1,b2) ->
@@ -98,9 +98,12 @@ let checkComparable t1 t2 err pos =
 
 let rec checkAssignable ?self value dest err pos =
   checkFlowType value dest err pos;
+  if Ty.errable value && not (Ty.errable dest)
+  then Err.error err pos @@ "cannot assign errable value to non-errable destination";
+  
   match T.base value, T.base dest with
-  | T.ERROR, _ -> ()
-  | _, T.ERROR -> ()
+  | T.CRASH, _ -> ()
+  | _, T.CRASH -> ()
 
   | T.ANY, _  -> ()
   | T.SELF, T.SELF -> ()
@@ -110,9 +113,6 @@ let rec checkAssignable ?self value dest err pos =
       checkAssignable ?self value t err pos
     | None -> Err.error err pos @@ "SELF type used outside of recursive context"
     end
-  | T.ERR t1, T.ERR t2 -> checkAssignable ?self t1 t2 err pos
-  | _, T.ERR t2 -> 
-    checkAssignable ?self value t2 err pos  
   | T.INT, T.INT -> ()
   | T.STRING, T.STRING -> ()
   | T.PAIR (a1,a2), T.PAIR (b1,b2) ->
@@ -126,10 +126,8 @@ let rec checkAssignable ?self value dest err pos =
       then Err.error err pos @@ "pointer cell levels must be equal: " ^L.to_string (T.level t_value) ^ " vs " ^ L.to_string (T.level t_dest)
     );
     checkAssignable ?self t_value t_dest err pos
-
   | T.PATH (t_value, s1), T.PATH (t_dest, s2) ->
     if (s1 != s2) then Err.error err pos @@ "cannot assign paths of different sizes: " ^ string_of_int s1 ^ " with " ^ string_of_int s2;
-      
     checkAssignable ?self t_value t_dest err pos
 
   | b1, b2 -> Err.error err pos @@ "cannot assign expression of type " ^ Ty.base_to_string b1 ^ " to variable of type " ^ Ty.base_to_string b2
@@ -149,7 +147,6 @@ let checkString t err pos =
   | b -> Err.error err pos @@ "string required, " ^ Ty.base_to_string b ^ " provided"
 
 exception NotImplemented of string
-
 let rec transExp ({err;_} as ctxt) =
   let rec trexp (A.Exp{exp_base;pos}) =
     let (^!) exp_base ty = Exp{exp_base;ty;pos} in
@@ -166,28 +163,40 @@ let rec transExp ({err;_} as ctxt) =
       let (left,lty) = e_ty @@ trexp left in
       let (right,rty) = e_ty @@ trexp right in
       let level = L.lub (Ty.level lty) (Ty.level rty) in
-      let unwrap ty = match Ty.base ty with Ty.ERR t -> t | _ -> ty in
-      let has_err ty = match Ty.base ty with Ty.ERR _ -> true | _ -> false in
-      let base = match oper with
+  
+      let base, errable = match oper with
         | CoalesceOp ->
-          begin match Ty.base lty, Ty.base rty with
-          | Ty.ERR t1, Ty.ERR t2 -> checkAssignable t1 t2 err pos; Ty.ERR t2
-          | Ty.ERR t1, _ -> checkAssignable t1 rty err pos; Ty.base rty
-          | _ -> Err.error err pos "left side of coalesce must be an err type"; Ty.base lty
+            print_string "COAL\n";
+            print_string @@ "dest: " ^ Ty.to_string lty ^ "\n";
+            print_string @@ "val: " ^ Ty.to_string rty ^ "\n";
+            print_string @@ "lvl: " ^ L.to_string level ^ "\n";
+          begin match Ty.errable lty, Ty.errable rty with
+          | true, true ->
+            checkAssignable lty rty err pos;
+            print_string @@ "1ret: " ^ Ty.base_to_string(Ty.base rty)  ^ "\n";
+            Ty.base rty, true
+          | true, _ ->
+            (* Swap rty lty order to make the check go through *)
+            checkAssignable rty lty err pos;
+            print_string @@ "2ret: " ^ Ty.to_string rty ^ " " ^ Ty.to_string lty  ^ "\n";
+            Ty.base lty, false
+          | _ ->
+            Err.error err pos "left side of coalesce must be an errable type";
+            Ty.base lty, false
           end
         | PlusOp | MinusOp | TimesOp | LtOp | LeOp | GtOp | GeOp | AndOp | OrOp ->
-          checkInt (unwrap lty) err pos;
-          checkInt (unwrap rty) err pos;
-          if has_err lty || has_err rty then Ty.ERR (Ty.Type{base=Ty.INT;level}) else Ty.INT
+          checkInt lty err pos;
+          checkInt rty err pos;
+          Ty.INT, (Ty.errable lty || Ty.errable rty)
         | EqOp | NeqOp ->
-          checkComparable (unwrap lty) (unwrap rty) err pos;
-          if has_err lty || has_err rty then Ty.ERR (Ty.Type{base=Ty.INT;level}) else Ty.INT
+          checkComparable lty rty err pos;
+          Ty.INT, (Ty.errable lty || Ty.errable rty)
         | CaretOp ->
-          checkString (unwrap lty) err pos;
-          checkString (unwrap rty) err pos;
-          if has_err lty || has_err rty then Ty.ERR (Ty.Type{base=Ty.STRING;level}) else Ty.STRING
+          checkString lty err pos;
+          checkString rty err pos;
+          Ty.STRING, (Ty.errable lty || Ty.errable rty)
         in
-      OpExp{left;oper;right} ^! Ty.Type{base;level}
+      OpExp{left;oper;right} ^! Ty.Type{base;errable;level}
     | ProjExp {proj;exp} -> 
       let (exp,ty,level) = e_ty_lvl @@ trexp exp in
       let proj,ty =
@@ -201,35 +210,34 @@ let rec transExp ({err;_} as ctxt) =
       let (a,aty) = e_ty @@ trexp a in
       let (b,bty) = e_ty @@ trexp b in
       let base = T.PAIR (aty,bty) in
-      PairExp (a,b) ^! T.Type{base;level=L.bottom}
+      PairExp (a,b) ^! T.Type{base;errable=false;level=L.bottom}
     | ArrayExp arr ->
       let ty = match arr with
       | hd::_ ->
         let _, ty = e_ty @@ transExp ctxt hd in
         ty
       | [] ->
-        T.Type{base=Ty.ANY; level=L.bottom} in
-        let f exp =
-          let e,ety = e_ty @@ transExp ctxt exp in
-          checkBaseType ty ety err pos;
-          e in
+        T.Type{base=Ty.ANY;errable=false;level=L.bottom} in
+      let f exp =
+        let e,ety = e_ty @@ transExp ctxt exp in
+        checkBaseType ty ety err pos;
+        e in
       let arr = List.map f arr in
       let base = T.ARRAY ty in
-      ArrayExp arr ^! T.Type{base;level=L.bottom}
+      ArrayExp arr ^! T.Type{base;errable=false;level=L.bottom}
     | ArrayConstructorExp {length;value} -> 
       let e, ty = e_ty @@ transExp ctxt value in
       let base = T.ARRAY ty in
-      ArrayExp (List.init length (fun _ -> e)) ^! T.Type{base;level=L.bottom}
-    | NilExp -> NilExp ^! _bot (T.POINTER (T.Type{base=T.ANY; level=L.bottom}))
-    | OnilExp size -> OnilExp size ^! _bot (T.PATH ((T.Type{base=T.ANY; level=L.bottom}), size))
+      ArrayExp (List.init length (fun _ -> e)) ^! T.Type{base;errable=false;level=L.bottom}
+    | NilExp -> NilExp ^! _bot (T.POINTER (T.Type{base=T.ANY;errable=false;level=L.bottom}))
+    | OnilExp size -> OnilExp size ^! _bot (T.PATH ((T.Type{base=T.ANY;errable=false;level=L.bottom}), size))
     | AllocExp p -> 
       let e, ty = e_ty @@ trexp p in
       AllocExp e ^! _bot (T.POINTER ty)
     | OramExp{value=p; size=s} -> 
       let e, ty = e_ty @@ trexp p in
-      OramExp{value=e; size=s} ^! (Ty.Type{base=(T.PATH (ty, s));level=L.bottom})
+      OramExp{value=e; size=s} ^! Ty.Type{base=(T.PATH (ty, s));errable=false;level=L.bottom}
   in trexp
-  
 and transVar ({err;_} as ctxt) =
   let rec trvar (A.Var{var_base;pos}) =
     let (^!) var_base ty = Var{var_base;loc=LOCAL;ty;pos} in
@@ -247,10 +255,12 @@ and transVar ({err;_} as ctxt) =
       let exp,ety,elvl = e_ty_lvl @@ transExp ctxt exp in
       checkInt ety err pos;
       let cty = match T.base vty with
-        | T.ARRAY t -> if not (L.flows_to elvl (Ty.level t)) then errTy err pos @@ "index does not flow to array content level: " ^ T.to_string ety ^ " to " ^ T.to_string t else t 
+        | T.ARRAY t -> 
+          if not (L.flows_to elvl (Ty.level t)) 
+          then errTy err pos @@ "index does not flow to array content level: " ^ T.to_string ety ^ " to " ^ T.to_string t 
+          else Ty.Type{base=T.base t; errable=true; level=Ty.level t}
         | _ -> errTy err pos @@ "variable type not an array type: " ^ T.to_string vty in
       begin
-  
       match loc with
       | LOCAL -> SubscriptVar{var;exp} ^! cty
       | STORE -> SubscriptVar{var;exp} ^@ cty
@@ -264,10 +274,11 @@ and transVar ({err;_} as ctxt) =
           | _ -> t
           end
         | T.PATH (t, _) ->
-          begin match T.base t with
+          let inner = begin match T.base t with
           | T.SELF -> vty
           | _ -> t
-          end
+          end in
+          Ty.Type{base=T.base inner; errable=true; level=Ty.level inner}
         | _ -> errTy err pos @@ "variable is not a pointer type: " ^ T.to_string vty in
       begin
       match loc with
@@ -308,7 +319,6 @@ let transCmd ({err;_} as ctxt) =
           checkLowPC pc err pos
       end;
       checkAssignable ety varty err pos;
-      (* checkAssignable ~self:varty ety varty err pos; *)
       fromBase @@ AssignCmd{var;exp=e}, q
     | BindCmd {var;exp} ->
       let var,varty,varloc = v_ty_loc @@ transVar ctxt var in
@@ -428,6 +438,7 @@ let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
       | _ -> ()
     in
     checkPtrLevels ty;
+    (* print_string @@ "DeclType: " ^ (Ty.to_string ty) ^ "\n"; *)
     VarDecl{x;ty;init;pos}
   | A.NetworkChannelDecl {channel;level;potential;ty;pos} ->
     if H.mem lambda channel

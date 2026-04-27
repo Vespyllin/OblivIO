@@ -8,14 +8,14 @@ type basetype =
   | ARRAY of ty
   | POINTER of ty
   | PATH of ty * int
-  | ERROR 
   | ANY
-  | ERR of ty
   | SELF
+  | CRASH 
 
-and ty = Type of {base: basetype; level: L.level}
+and ty = Type of {base: basetype; errable: bool; level: L.level}
 
 val base: ty -> basetype
+val errable: ty -> bool
 val level: ty -> L.level
 
 val raiseTo: ty -> L.level -> ty
