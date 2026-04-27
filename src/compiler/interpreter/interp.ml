@@ -443,6 +443,7 @@ let rec deep_copy = function
   | PairVal{error;data=(a, b)} -> PairVal{error;data=(deep_copy a, deep_copy b)}
 
 type update = ASSIGN | BIND
+
 let rec readvar ctxt =
   let rec _V access_path (A.Var{var_base;loc;ty;_}) = match var_base with
     | A.SimpleVar x ->

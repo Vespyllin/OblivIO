@@ -106,18 +106,15 @@ let rec checkAssignable ?self value dest err pos =
   | _, T.CRASH -> ()
 
   | T.ANY, _  -> ()
-  | T.SELF _ , T.SELF _ -> ()
+  | T.SELF t1, T.SELF t2 ->
+    (* TODO: Are all the cases for 'self' assignment covered? *)
+    (match !t2 with
+      | Some _ -> ()
+      | None -> t2 := !t1)
   | T.SELF t1 , _ -> 
-    print_string "A\n";
-    let x = match !t1 with 
-      | Some(y) -> 
-        (* print_string (T.to_string y);
-        print_string "\n";
-        print_string (T.to_string dest);
-        print_string "\n"; *)
-        checkAssignable y dest err pos;
-      | None -> 
-        Err.error err pos @@ "mismached types: " ^ (T.to_string value) ^ " to " ^ (T.to_string dest) 
+    let _ = match !t1 with 
+    | Some(y) -> checkAssignable y dest err pos;
+    | None -> Err.error err pos @@ "mismached types: " ^ (T.to_string value) ^ " to " ^ (T.to_string dest) 
     in
     ()
   | _, T.SELF t2 ->
@@ -125,10 +122,7 @@ let rec checkAssignable ?self value dest err pos =
     | Some t -> 
       t2 := self;
       checkAssignable ?self value t err pos
-    | None -> 
-      (* print_string @@ "A: " ^ (T.to_string value) ^ "\n";
-      print_string @@ "A: " ^ (T.to_string dest) ^ "\n"; *)
-      Err.error err pos @@ "mismached types: " ^ (T.to_string value) ^ " to " ^ (T.to_string dest) 
+    | None -> Err.error err pos @@ "mismached types: " ^ (T.to_string value) ^ " to " ^ (T.to_string dest) 
     end
   | T.INT, T.INT -> ()
   | T.STRING, T.STRING -> ()

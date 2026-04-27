@@ -1,18 +1,10 @@
 TEST
 
-local channel PATH: err(path((_ * int@{h})@{h})[3]@{h});
 local channel STR: err(string@{h});
 local channel INT: err(int@{h});
 
-var c: path((_ * int@{h})@{h})[3]@{h} = onil(3);
-//var e: err(int@{h}) = 0;
-
 START@{} (ignored: int@{}) {
-    c = oram((onil(3), 5), 3);
-    
     output(STR, "ok");
-    // output(INT, snd(*c));
-    output(PATH, fst(*c));
 
     exit();
 }
