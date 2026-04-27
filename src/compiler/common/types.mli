@@ -9,7 +9,7 @@ type basetype =
   | POINTER of ty
   | PATH of ty * int
   | ANY
-  | SELF
+  | SELF of ty option ref
   | CRASH 
 
 and ty = Type of {base: basetype; errable: bool; level: L.level}

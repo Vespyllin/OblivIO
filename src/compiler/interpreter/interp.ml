@@ -400,7 +400,12 @@ let rec from_bytes (target_type: Ty.basetype) (b: bytes) : value =
     let v1d =  from_bytes (Ty.base v1) (Bytes.sub b 3 11) in
     let v2d =  from_bytes (Ty.base v2) (Bytes.sub b (3 + 11) 11) in
     PairVal {error; data=(v1d,v2d)}
-  | _ -> raise @@ InterpFatal "from_bytes: unsupported target type"
+  | Ty.SELF t -> 
+    begin match !t with
+    | Some x -> from_bytes (Ty.base x) b
+    | None -> raise @@ InterpFatal "uninitialized recursive type";
+    end
+  | _ -> raise @@ InterpFatal ("from_bytes: unsupported target type " ^ (Ty.base_to_string target_type))
 
 let get_byte_size (v: value) : int =
   let fixed_size = 11 in
@@ -583,12 +588,10 @@ and writevar ctxt updkind upd mode =
         match updkind, ctxt.unsafe with
         | BIND, false ->
           let A.Var{ty;_} = var in
-          let inner_ty, s = match Ty.base ty with
-            | Ty.PATH (t, s) -> Ty.base t, s
-            | Ty.POINTER t -> Ty.base t, 0
+          let inner_ty = match Ty.base ty with
+            | Ty.PATH (t, _) -> Ty.base t
+            | Ty.POINTER t -> Ty.base t
             | _ -> raise @@ InterpFatal "HeapWrite: not a pointer type" in
-
-          print_string @@ string_of_int size ^ " " ^ string_of_int s ^ "\n";
           
           let old_val = from_bytes inner_ty (ORAM.read (H.find ctxt.oram size) correct_addr) in
           ORAM.write (H.find ctxt.oram size) correct_addr (to_bytes (safeSelect mode old_val upd))
@@ -648,7 +651,6 @@ and eval ctxt =
         raise @@ InterpFatal ("HeapWrite: Value too large. Attempted to write element of size " ^ string_of_int(get_byte_size v) ^ " into block of size " ^ string_of_int(ptr_size));
 
       if (H.find_opt ctxt.oram size = None) then H.add ctxt.oram size (ORAM.create ~capacity:16 ~block_size:ptr_size ~z:4);
-
       let addr = ORAM.alloc (H.find ctxt.oram size) (to_bytes v) in 
       PathVal{error=0; size; addr}
       

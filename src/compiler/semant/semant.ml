@@ -106,13 +106,29 @@ let rec checkAssignable ?self value dest err pos =
   | _, T.CRASH -> ()
 
   | T.ANY, _  -> ()
-  | T.SELF, T.SELF -> ()
-  | _, T.SELF ->
+  | T.SELF _ , T.SELF _ -> ()
+  | T.SELF t1 , _ -> 
+    print_string "A\n";
+    let x = match !t1 with 
+      | Some(y) -> 
+        (* print_string (T.to_string y);
+        print_string "\n";
+        print_string (T.to_string dest);
+        print_string "\n"; *)
+        checkAssignable y dest err pos;
+      | None -> 
+        Err.error err pos @@ "mismached types: " ^ (T.to_string value) ^ " to " ^ (T.to_string dest) 
+    in
+    ()
+  | _, T.SELF t2 ->
     begin match self with
     | Some t -> 
+      t2 := self;
       checkAssignable ?self value t err pos
     | None -> 
-      Err.error err pos @@ "SELF type used outside of recursive context"
+      (* print_string @@ "A: " ^ (T.to_string value) ^ "\n";
+      print_string @@ "A: " ^ (T.to_string dest) ^ "\n"; *)
+      Err.error err pos @@ "mismached types: " ^ (T.to_string value) ^ " to " ^ (T.to_string dest) 
     end
   | T.INT, T.INT -> ()
   | T.STRING, T.STRING -> ()
@@ -264,12 +280,12 @@ and transVar ({err;_} as ctxt) =
       let t = match T.base vty with
         | T.POINTER t ->
           begin match T.base t with
-          | T.SELF -> vty
+          | T.SELF _ -> vty
           | _ -> t
           end
         | T.PATH (t, _) ->
           let inner = begin match T.base t with
-          | T.SELF -> vty
+          | T.SELF _ -> vty
           | _ -> t
           end in
           Ty.Type{base=T.base inner; errable=true; level=Ty.level inner}
@@ -418,34 +434,35 @@ let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
             checkOramCompatibleTypes ~strict:true a; 
             checkOramCompatibleTypes ~strict:true b
           end
-      | T.SELF -> ()
+      | T.SELF _ -> ()
       | _ -> Err.error err pos "datatype is not supported in ORAM"
     in
     let rec checkPtrLevels ty =
-      match T.base ty with
-      | T.POINTER cell ->
-        if not @@ L.flows_to (T.level ty) (T.level cell)
-        then Err.error err pos @@ "pointer cannot be more privileged than pointee";
-        checkPtrLevels cell
-      | T.PATH (block, _) ->
-        if L.flows_to (T.level ty) L.bottom
-        then Err.error err pos @@ "path cannot be public";
+    match T.base ty with
+    | T.SELF _ -> ()
+    | T.POINTER cell ->
+      if not @@ L.flows_to (T.level ty) (T.level cell)
+      then Err.error err pos @@ "pointer cannot be more privileged than pointee";
 
-        begin match T.base block with
-        | T.SELF -> ()
-        | _ ->
-          if not @@ L.flows_to (T.level ty) (T.level block) 
-          then Err.error err pos @@ "path cannot be more privileged than block";
-          checkPtrLevels block;
-          end;
-        checkOramCompatibleTypes ty;
-      | T.ARRAY content ->
-        if not @@ L.flows_to (T.level ty) (T.level content)
-        then Err.error err pos @@ "array content cannot be more privileged than array";
-      | T.SELF -> ()
-      | _ -> ()
-    in
-    checkPtrLevels ty;
+      checkPtrLevels cell
+    | T.PATH (block, _) ->
+      if L.flows_to (T.level ty) L.bottom
+      then Err.error err pos @@ "path cannot be public";
+
+      begin match T.base block with
+      | T.SELF _ -> ()
+      | _ ->
+        if not @@ L.flows_to (T.level ty) (T.level block) 
+        then Err.error err pos @@ "path cannot be more privileged than block";
+        checkPtrLevels block;
+      end;
+      checkOramCompatibleTypes ty;
+    | T.ARRAY content ->
+      if not @@ L.flows_to (T.level ty) (T.level content)
+      then Err.error err pos @@ "array content cannot be more privileged than array";
+    | _ -> ()
+  in
+  checkPtrLevels ty;
     VarDecl{x;ty;init;pos}
   | A.NetworkChannelDecl {channel;level;potential;ty;pos} ->
     if H.mem lambda channel

@@ -157,7 +157,7 @@ basetype:
 
 %inline type_at_lvl:
 | base=basetype AT level=lvl  { T.Type{base;errable=false;level} }
-| UNDERSCORE                  { T.Type{base=T.SELF; errable=false; level=L.bottom} }
+| UNDERSCORE                  { let self = ref None in T.Type{base=(T.SELF self); errable=false; level=L.bottom} }
 
 %inline type_anno:
 | COLON t=type_at_lvl  { t }

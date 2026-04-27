@@ -9,7 +9,7 @@ type basetype =
   | POINTER of ty
   | PATH of ty * int
   | ANY
-  | SELF
+  | SELF of ty option ref
   | CRASH 
 
 and ty = Type of {base: basetype; errable: bool; level: L.level}
@@ -38,7 +38,7 @@ let rec base_to_string = function
   | POINTER t -> String.concat "" ["ptr("; to_string t; ")"]
   | PATH (t, s) -> String.concat "" ["path("; to_string t; ")["; string_of_int s; "]"]
   | ANY -> "any"
-  | SELF -> "μ"
+  | SELF _ -> "μ" 
   | CRASH -> "crash"
 
 and to_string (Type{base;errable;level}) =
