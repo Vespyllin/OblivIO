@@ -1,3 +1,16 @@
+module ORAM = Path_oram
+
+type hash_fn = { a: int; b: int }
+
+
+type perfect_hash_state =
+  { oram        : Path_oram.state
+  ; h1          : hash_fn
+  ; h2s         : hash_fn array
+  ; n_buckets   : int
+  ; bucket_size : int
+  ; block_size  : int
+  }
 
 type value =
 | IntVal of {error: int; value:int}
@@ -6,6 +19,7 @@ type value =
 | ArrayVal of {error: int; length: int; data: value array}
 | PointerVal of {error: int; addr: int}
 | PathVal of {error: int; size: int; addr: int}
+| MapVal of {error: int; data: perfect_hash_state}
 
 let rec to_string = function
   | StringVal {error; length;data} ->
@@ -33,12 +47,14 @@ let rec to_string = function
       "ptr(" ^ string_of_int addr ^ ")" 
   | PathVal {error;size;addr} ->
       if error = 1 then "ErrPtr" else
-      "path(" ^ string_of_int addr ^ ")[" ^ string_of_int size ^ "]" 
+      "path(" ^ string_of_int addr ^ ")[" ^ string_of_int size ^ "]"
+  | MapVal _ -> "map"
 
 let rec size = function 
-  | IntVal _                          ->    8
-  | StringVal{data;_}     ->    8 + Array.length data
-  | PairVal {data=(a,b);_}       ->    size a + size b 
-  | ArrayVal {data;  _}  ->    8 + (8*Array.length data)
-  | PointerVal _                      ->    8
-  | PathVal _                         ->    8
+  | IntVal _                                    ->    8
+  | StringVal{data;_}               ->    8 + Array.length data
+  | PairVal {data=(a,b);_}        ->    size a + size b 
+  | ArrayVal {data;  _}            ->    8 + (8*Array.length data)
+  | PointerVal _                                ->    8
+  | PathVal _                                   ->    8
+  | MapVal _                                    ->    -1

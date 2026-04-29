@@ -19,9 +19,9 @@ let bitAux ladv (Lbit{bit;level}) =
 
 let rec valueAux ladv (TypedVal{value;ty}) =
   match value,ty with
-  | IntVal _, T.Type{base=INT;level} when L.flows_to level ladv -> V.to_string value
-  | StringVal _, T.Type{base=STRING;level} when L.flows_to level ladv -> V.to_string value
-  | PairVal {data=(a,b);_}, T.Type{base=PAIR (at,bt);level} when L.flows_to level ladv ->
+  | IntVal _, T.Type{base=INT;level;_} when L.flows_to level ladv -> V.to_string value
+  | StringVal _, T.Type{base=STRING;level;_} when L.flows_to level ladv -> V.to_string value
+  | PairVal {data=(a,b);_}, T.Type{base=PAIR (at,bt);level;_} when L.flows_to level ladv ->
     String.concat "" [
       "("
     ; valueAux ladv (TypedVal{value=a;ty=at})
@@ -29,7 +29,7 @@ let rec valueAux ladv (TypedVal{value;ty}) =
     ; valueAux ladv (TypedVal{value=b;ty=bt})
     ; ")"
     ]
-  | ArrayVal {length;data;_}, T.Type{base=ARRAY ty;level} when L.flows_to level ladv ->
+  | ArrayVal {length;data;_}, T.Type{base=ARRAY ty;level;_} when L.flows_to level ladv ->
     let datastr =
       data |> Array.to_list
            |> Util.take length

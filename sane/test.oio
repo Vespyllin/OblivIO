@@ -3,6 +3,8 @@ TEST
 local channel STR: err(string@{h});
 local channel INT: err(int@{h});
 
+var c: map((int@{h} * int@{h})@{h})@{} = makemap([(1,2)]);
+
 START@{} (ignored: int@{}) {
     output(STR, "ok");
 

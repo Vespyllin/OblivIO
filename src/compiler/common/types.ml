@@ -8,6 +8,7 @@ type basetype =
   | ARRAY of ty
   | POINTER of ty
   | PATH of ty * int
+  | MAP of ty
   | ANY
   | SELF of ty option ref
   | CRASH 
@@ -37,6 +38,7 @@ let rec base_to_string = function
     to_string t ^ "[]"
   | POINTER t -> String.concat "" ["ptr("; to_string t; ")"]
   | PATH (t, s) -> String.concat "" ["path("; to_string t; ")["; string_of_int s; "]"]
+  | MAP t -> String.concat "" ["map("; to_string t; ")"]
   | ANY -> "any"
   | SELF _ -> "μ" 
   | CRASH -> "crash"

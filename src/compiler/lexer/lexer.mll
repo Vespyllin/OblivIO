@@ -63,6 +63,7 @@ rule token = parse
 | "string"            { STRINGTYPE }
 | "ptr"               { PTRTYPE }
 | "path"              { PATHTYPE }
+| "map"               { MAPTYPE }
 | "err"               { ERRTYPE }
 | "input"             { INPUT }
 | "output"            { OUTPUT }
@@ -70,8 +71,9 @@ rule token = parse
 | "alloc"             { ALLOC }
 | "oram"              { ORAM }
 | "array"             { ARRAY }
+| "makemap"           { MAP }
 | "nil"               { NIL }
-| "onil"               { ONIL }
+| "onil"              { ONIL }
 | "_"                 { UNDERSCORE }
 | "??"                { COALESCE }
 | "//" nonnewline* '\n' { Lexing.new_line lexbuf; token lexbuf }

@@ -7,7 +7,8 @@ module Ty = Common.Types
 module Tr = Common.Trace
 module C = Common.Channel
 module Heap = Common.Heap
-module ORAM = ORAM.Path_oram
+module PathORAM = Common.Path_oram
+module ORAMMap = Common.Perfectmap
 
 module H = Hashtbl
 
@@ -30,7 +31,7 @@ type context =
   ; memory: (string, value) H.t
   ; store: (string, value) H.t
   ; heap: Heap.t
-  ; oram: (int, ORAM.state) H.t
+  ; oram: (int, PathORAM.state) H.t
   ; handlers: (string, handler_info) H.t
   ; trust_map: (C.channel, L.level * Ty.ty) H.t
   ; server: server_info
@@ -416,8 +417,9 @@ let get_byte_size (v: value) : int =
   | PairVal _ -> 3 + 2 * fixed_size
   | StringVal {data; _} -> 3 + Array.length data
   | ArrayVal {data; _} -> 3 + Array.length data * fixed_size
+  | _ -> raise @@ InterpFatal "not impl"
 
-let rec set_err (v: value) error : value =
+let set_err (v: value) error : value =
   match v with
   | IntVal {value; _} -> IntVal {error; value}
   | PointerVal {addr; _} -> PointerVal {error; addr}
@@ -425,14 +427,16 @@ let rec set_err (v: value) error : value =
   | StringVal {length; data; _} -> StringVal {error; length; data}
   | ArrayVal {length; data; _} -> ArrayVal {error; length; data}
   | PairVal{data;_} -> PairVal{error; data}
+   | _ -> raise @@ InterpFatal "not impl"
 
-let rec get_error = function
+let get_error = function
   | IntVal {error; _} -> error
   | PointerVal {error; _} -> error
   | PathVal {error; _} -> error
   | StringVal {error; _} -> error
   | ArrayVal {error; _} -> error
   | PairVal{error;_} -> error
+  | _ -> raise @@ InterpFatal "not impl"
 
 let rec deep_copy = function
   | IntVal {error; value} -> IntVal {error; value}
@@ -441,6 +445,7 @@ let rec deep_copy = function
   | StringVal {error; length; data} -> StringVal {error; length; data = Array.copy data}
   | ArrayVal {error; length; data} -> ArrayVal {error; length; data = Array.map deep_copy data}
   | PairVal{error;data=(a, b)} -> PairVal{error;data=(deep_copy a, deep_copy b)}
+  | _ -> raise @@ InterpFatal "not impl"
 
 type update = ASSIGN | BIND
 
@@ -499,10 +504,10 @@ let rec readvar ctxt =
         Heap.read ctxt.heap addr
       end else begin
         (* Private pointer, obliviate *)
-        if (H.find_opt ctxt.oram size = None) then H.add ctxt.oram size (ORAM.create ~capacity:16 ~block_size:((size*8) + 3) ~z:4);
+        if (H.find_opt ctxt.oram size = None) then H.add ctxt.oram size (PathORAM.create ~capacity:16 ~block_size:((size*8) + 3) ~z:4);
         let correct_addr = (((error lxor 1) * addr) lor (error * 0)) in
         let base = Ty.base ty in
-        from_bytes base (ORAM.read (H.find ctxt.oram size) correct_addr)
+        from_bytes base (PathORAM.read (H.find ctxt.oram size) correct_addr)
       end
 in _V []
 
@@ -584,7 +589,7 @@ and writevar ctxt updkind upd mode =
         if (get_byte_size upd > (size * 8) + 3) then
           raise @@ InterpFatal ("HeapWrite: Value too large. Attempted to write element of size " ^ string_of_int(get_byte_size upd) ^ " into block of size " ^ string_of_int(0));
 
-        if (H.find_opt ctxt.oram size = None) then H.add ctxt.oram size (ORAM.create ~capacity:16 ~block_size:((size*8) + 3) ~z:4);
+        if (H.find_opt ctxt.oram size = None) then H.add ctxt.oram size (PathORAM.create ~capacity:16 ~block_size:((size*8) + 3) ~z:4);
 
         match updkind, ctxt.unsafe with
         | BIND, false ->
@@ -594,10 +599,10 @@ and writevar ctxt updkind upd mode =
             | Ty.POINTER t -> Ty.base t
             | _ -> raise @@ InterpFatal "HeapWrite: not a pointer type" in
           
-          let old_val = from_bytes inner_ty (ORAM.read (H.find ctxt.oram size) correct_addr) in
-          ORAM.write (H.find ctxt.oram size) correct_addr (to_bytes (safeSelect mode old_val upd))
+          let old_val = from_bytes inner_ty (PathORAM.read (H.find ctxt.oram size) correct_addr) in
+          PathORAM.write (H.find ctxt.oram size) correct_addr (to_bytes (safeSelect mode old_val upd))
         | _ ->
-          if mode = 1 then ORAM.write (H.find ctxt.oram 0) correct_addr (to_bytes upd)
+          if mode = 1 then PathORAM.write (H.find ctxt.oram 0) correct_addr (to_bytes upd)
       end
 in _V []
 
@@ -634,12 +639,19 @@ and eval ctxt =
       let length = List.length arr in
       let data = arr |> List.map (fun e -> _E e) |> Array.of_list in
       ArrayVal {error=0;length;data}
+    | A.MapExp arr -> 
+      let v = _E arr in
+      begin match v with
+      | ArrayVal _ ->
+        MapVal {error=0; data=ORAMMap.build v}
+      | _ -> raise @@ InterpFatal "MapExp: expected array of pairs"
+      end
     | A.NilExp -> 
       PointerVal{error=0;addr=0}
-      | A.AllocExp e ->
-        let v = _E e in
-        let addr = Heap.alloc ctxt.heap v in
-        PointerVal{error=0;addr}
+    | A.AllocExp e ->
+      let v = _E e in
+      let addr = Heap.alloc ctxt.heap v in
+      PointerVal{error=0;addr}
     | A.OnilExp size -> 
       PathVal{error=0; size; addr=0}
     | A.OramExp{value=e; size} ->
@@ -651,8 +663,8 @@ and eval ctxt =
       if (get_byte_size v > ptr_size) then 
         raise @@ InterpFatal ("HeapWrite: Value too large. Attempted to write element of size " ^ string_of_int(get_byte_size v) ^ " into block of size " ^ string_of_int(ptr_size));
 
-      if (H.find_opt ctxt.oram size = None) then H.add ctxt.oram size (ORAM.create ~capacity:16 ~block_size:ptr_size ~z:4);
-      let addr = ORAM.alloc (H.find ctxt.oram size) (to_bytes v) in 
+      if (H.find_opt ctxt.oram size = None) then H.add ctxt.oram size (PathORAM.create ~capacity:16 ~block_size:ptr_size ~z:4);
+      let addr = PathORAM.alloc (H.find ctxt.oram size) (to_bytes v) in 
       PathVal{error=0; size; addr}
       
   in _E
@@ -859,8 +871,8 @@ let interp ?(unsafe=false) print_when print_what (A.Prog{node;decls;hls}) =
     ; trace = Tr.empty_trace print_when print_what
     } in
 
-  (* ORAM.create ~capacity:16 ~block_size:32 ~z:4 *)
-  (* H.add ctxt.oram 0 (ORAM.create ~capacity:16 ~block_size:0 ~z:4); *)
+  (* PathORAM.create ~capacity:16 ~block_size:32 ~z:4 *)
+  (* H.add ctxt.oram 0 (PathORAM.create ~capacity:16 ~block_size:0 ~z:4); *)
 
   let f (A.Hl{handler;x;body;_}) =
     H.add ctxt.handlers handler {x;body} in

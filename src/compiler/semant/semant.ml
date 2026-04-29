@@ -138,6 +138,8 @@ let rec checkAssignable ?self value dest err pos =
   | T.PATH (t_value, s1), T.PATH (t_dest, s2) ->
     if (s1 != s2) then Err.error err pos @@ "cannot assign paths of different sizes: " ^ string_of_int s1 ^ " to " ^ string_of_int s2;
     checkAssignable ?self t_value t_dest err pos
+  | T.MAP t_value, T.MAP t_dest ->
+    checkAssignable ?self t_value t_dest err pos
 
   | b1, b2 -> Err.error err pos @@ "cannot assign expression of type " ^ Ty.base_to_string b1 ^ " to variable of type " ^ Ty.base_to_string b2
 
@@ -232,6 +234,28 @@ let rec transExp ({err;_} as ctxt) =
       let e, ty = e_ty @@ transExp ctxt value in
       let base = T.ARRAY ty in
       ArrayExp (List.init length (fun _ -> e)) ^! T.Type{base;errable=false;level=L.bottom}
+    | MapExp t ->
+      let ty = match t with
+      | hd::_ ->
+        let _, ty = e_ty @@ transExp ctxt hd in
+        begin match T.base ty with
+        | T.PAIR _ -> ty
+        | _ -> errTy err pos @@ "map elements must be pairs, got: " ^ T.to_string ty
+        end
+      | [] ->
+        T.Type{base=T.PAIR(
+          T.Type{base=Ty.ANY;errable=false;level=L.bottom},
+          T.Type{base=Ty.ANY;errable=false;level=L.bottom}
+        );errable=false;level=L.bottom} in
+      let f exp =
+        let e,ety = e_ty @@ transExp ctxt exp in
+        checkBaseType ty ety err pos;
+        e in
+      let elems = List.map f t in
+      let arr_ty = T.Type{base=T.ARRAY ty;errable=false;level=L.bottom} in
+      let arr_exp = ArrayExp elems ^! arr_ty in
+      let base = T.MAP ty in
+      MapExp arr_exp ^! T.Type{base;errable=false;level=L.bottom}
     | NilExp -> NilExp ^! _bot (T.POINTER (T.Type{base=T.ANY;errable=false;level=L.bottom}))
     | OnilExp size -> OnilExp size ^! _bot (T.PATH ((T.Type{base=T.ANY;errable=false;level=L.bottom}), size))
     | AllocExp p -> 
