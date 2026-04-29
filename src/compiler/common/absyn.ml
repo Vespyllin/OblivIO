@@ -16,6 +16,7 @@ and var = Var of { var_base: var_base; pos: pos}
 and var_base
   = SimpleVar of string
   | SubscriptVar of {var: var; exp: exp}
+  | MapVar of {var: var; exp: exp}
   | HeapVar of { var: var }
 
 and exp = Exp of { exp_base: exp_base; pos: pos }

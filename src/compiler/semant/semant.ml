@@ -293,6 +293,26 @@ and transVar ({err;_} as ctxt) =
       | LOCAL -> SubscriptVar{var;exp} ^! cty
       | STORE -> SubscriptVar{var;exp} ^@ cty
       end
+    | MapVar {var;exp} ->
+      let var, vty, _, loc = v_ty_lvl_loc @@ trvar var in
+      let exp, ety, elvl = e_ty_lvl @@ transExp ctxt exp in
+      let cty = match T.base vty with
+        | T.MAP t ->
+          begin match T.base t with
+          | T.PAIR (fst_ty, snd_ty) -> 
+              checkAssignable ety fst_ty err pos;
+              let klvl = (Ty.level fst_ty) in
+              (* if not (L.flows_to elvl klvl)
+              then Err.error err pos @@ "key level does not flow to map key level: " ^ L.to_string elvl ^ " to " ^ L.to_string klvl; *)
+              raiseTo snd_ty (L.lub klvl elvl)
+          | _ -> errTy err pos @@ "map value type must be a pair, got: " ^ T.to_string vty
+          end
+        | _ -> errTy err pos @@ "variable is not a map type: " ^ T.to_string vty in
+      begin
+      match loc with
+      | LOCAL -> MapVar{var;exp} ^! cty
+      | STORE -> MapVar{var;exp} ^@ cty
+      end
     | HeapVar {var} ->
       let var, vty, _, loc = v_ty_lvl_loc @@ trvar var in
       let t = match T.base vty with
@@ -320,6 +340,7 @@ let rec varname (Var{var_base;_}) =
   | SimpleVar x -> x
   | SubscriptVar{var;_} -> varname var
   | HeapVar{var} -> "*" ^ varname var
+  | MapVar{var;_} ->varname var
 
 let checkWritable var varloc err pos =
   match varloc with

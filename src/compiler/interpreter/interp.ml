@@ -417,7 +417,7 @@ let get_byte_size (v: value) : int =
   | PairVal _ -> 3 + 2 * fixed_size
   | StringVal {data; _} -> 3 + Array.length data
   | ArrayVal {data; _} -> 3 + Array.length data * fixed_size
-  | _ -> raise @@ InterpFatal "not impl"
+  | _ -> raise @@ InterpFatal "get_byte_size not impl"
 
 let set_err (v: value) error : value =
   match v with
@@ -427,7 +427,7 @@ let set_err (v: value) error : value =
   | StringVal {length; data; _} -> StringVal {error; length; data}
   | ArrayVal {length; data; _} -> ArrayVal {error; length; data}
   | PairVal{data;_} -> PairVal{error; data}
-   | _ -> raise @@ InterpFatal "not impl"
+   | _ -> raise @@ InterpFatal "set_err not impl"
 
 let get_error = function
   | IntVal {error; _} -> error
@@ -436,7 +436,7 @@ let get_error = function
   | StringVal {error; _} -> error
   | ArrayVal {error; _} -> error
   | PairVal{error;_} -> error
-  | _ -> raise @@ InterpFatal "not impl"
+  | _ -> raise @@ InterpFatal "get_err not impl"
 
 let rec deep_copy = function
   | IntVal {error; value} -> IntVal {error; value}
@@ -445,7 +445,7 @@ let rec deep_copy = function
   | StringVal {error; length; data} -> StringVal {error; length; data = Array.copy data}
   | ArrayVal {error; length; data} -> ArrayVal {error; length; data = Array.map deep_copy data}
   | PairVal{error;data=(a, b)} -> PairVal{error;data=(deep_copy a, deep_copy b)}
-  | _ -> raise @@ InterpFatal "not impl"
+  | _ -> raise @@ InterpFatal "deep_copy: not impl"
 
 type update = ASSIGN | BIND
 
@@ -458,7 +458,7 @@ let rec readvar ctxt =
         | STORE -> lookup ctxt.store x in
       let rec unwrap_indices access_elem v =
         match access_elem, v with
-        | [], _ -> deep_copy v
+        | [], _ -> v
         | (idx,idx_lvl,arr_lvl)::idx_tl, ArrayVal{length;data;error} ->
           if (L.flows_to idx_lvl L.bottom && L.flows_to arr_lvl L.bottom) || ctxt.unsafe
             then if idx > length - 1 || idx < 0 then
@@ -467,9 +467,7 @@ let rec readvar ctxt =
               unwrap_indices idx_tl data.(idx)
           else 
             let len = Array.length data in
-            (* We can crash if length = 0, because size is public *)
             if (len = 0) then raise @@ InterpFatal "ReadVar: indexing array of size/length 0";
-
             let safe_value = ref (unwrap_indices idx_tl data.(0)) in
             let elem_err = ref 0 in
             for i = 0 to len-1 do
@@ -478,10 +476,8 @@ let rec readvar ctxt =
               safe_value := safeSelect right_idx !safe_value rec_res;
               elem_err := (right_idx * get_error rec_res) lor (lnot right_idx * !elem_err)
             done;
-
             let new_err = Bool.to_int(idx >= length lor error lor !elem_err) in
-            set_err (!safe_value) new_err
-
+            set_err (deep_copy (!safe_value)) new_err
         | _ -> raise @@ InterpFatal "readVar"
         in
       unwrap_indices access_path v
@@ -491,26 +487,41 @@ let rec readvar ctxt =
       let index_lvl = Ty.level index_ty in
       let arr_lvl = Ty.level ty in
       _V ((i, index_lvl, arr_lvl)::access_path) var
+    | A.MapVar {var;exp} ->
+      let map_val = _V [] var in
+      let A.Var{ty;_} = var in
+      let key = eval ctxt exp in
+      let value_type = match Ty.base ty with
+      | Ty.MAP t ->
+        begin match Ty.base t with
+        | Ty.PAIR (_, snd_ty) -> Ty.base snd_ty
+        | _ -> raise @@ InterpFatal "MapVar: map type is not a pair"
+        end
+      | _ -> raise @@ InterpFatal "MapVar: not a map type" in
+
+      begin match map_val with
+      | MapVal{error; data=map} ->
+        let key_int = _int key in
+        let correct_key = (((error lxor 1) * key_int) lor (error * 0)) in
+        ORAMMap.lookup map correct_key value_type
+      | _ -> raise @@ InterpFatal "MapVar: not a map"
+      end
     | A.HeapVar {var} ->
       let ptr = _V access_path var in
       let error, addr, size, oram = match ptr with
         | PointerVal{error; addr} -> error, addr, 0, false
         | PathVal{error; size; addr} -> error, addr, size, true
         | _ -> raise @@ InterpFatal "HeapVar: not a pointer 1" in
-      
       if not oram then begin
-        (* public pointer: direct heap access *)
         if (error = 1 || addr = 0) then raise @@ InterpFatal "readVar: Heap - reading from err/nil";
-        Heap.read ctxt.heap addr
+        deep_copy (Heap.read ctxt.heap addr)
       end else begin
-        (* Private pointer, obliviate *)
         if (H.find_opt ctxt.oram size = None) then H.add ctxt.oram size (PathORAM.create ~capacity:16 ~block_size:((size*8) + 3) ~z:4);
         let correct_addr = (((error lxor 1) * addr) lor (error * 0)) in
         let base = Ty.base ty in
         from_bytes base (PathORAM.read (H.find ctxt.oram size) correct_addr)
       end
 in _V []
-
 and writevar ctxt updkind upd mode =
   let rec _V path (A.Var{var_base;_}) = match var_base with
     | A.SimpleVar x ->
@@ -569,6 +580,28 @@ and writevar ctxt updkind upd mode =
       let idx = _int @@ eval ctxt exp in
       let lvl = Ty.level ty in
       _V ((idx,lvl)::path) var
+    
+    | A.MapVar {var;exp} ->
+      let map_val = readvar ctxt var in
+      let key = eval ctxt exp in
+      begin match map_val with
+      | MapVal{error; data=map} ->
+        let key_int = _int key in
+        let correct_key = (((error lxor 1) * key_int) lor (error * 0)) in
+        
+        begin match updkind, ctxt.unsafe with
+        | BIND, false ->
+          raise @@ InterpFatal "MapVar: bind not impl"
+          (* let old_val = match ORAMMap.lookup map correct_key with
+            | Some v -> v
+            | None -> set_err (IntVal{error=0; value=0}) 1 in
+          ORAMMap.update map correct_key (safeSelect mode old_val upd) *)
+        | _ ->
+          if mode = 1 then ORAMMap.update map correct_key upd
+        end
+      | _ -> raise @@ InterpFatal "MapVar: not a map"
+      end
+
     | A.HeapVar {var} ->
       let error, addr, size, oram = match readvar ctxt var with
         | PointerVal{error; addr} -> error, addr, 0, false

@@ -72,6 +72,8 @@ var_base:
   { SubscriptVar {var;exp} }
 | TIMES var=var
   { HeapVar {var} }
+| var=var LBRACK LBRACK exp=exp RBRACK RBRACK
+  { MapVar {var; exp} }
 
 var:
 | var_base=var_base { Var {var_base; pos=$startpos} }

@@ -119,8 +119,6 @@ let access oram ~address ~op =
 
   current_data
 
-
-
 let read oram address =
   access oram ~address:address ~op:`Read
 

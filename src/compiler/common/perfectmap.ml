@@ -144,9 +144,6 @@ let decode_slot vt (b: bytes) : (int * value) option =
 
 let dummy_block block_size = Bytes.make block_size '\x00'
 
-(* ------------------------------------------------------------------ *)
-(* Oblivious array access — always scans all n elements                *)
-(* ------------------------------------------------------------------ *)
 
 let safeSelect bit a b = if bit = 1 then b else a
 
@@ -157,10 +154,6 @@ let oblivious_array_access arr key n =
     result := safeSelect is_target !result arr.(i)
   done;
   !result
-
-(* ------------------------------------------------------------------ *)
-(* Two-level perfect hash table                                         *)
-(* ------------------------------------------------------------------ *)
 
 
 
@@ -202,8 +195,7 @@ let build (kvs: value) =
   | ArrayVal {error; length; data} -> error, length, data
   | _ -> raise @@ PerfectHashFatal "not provided an array of k,v pairs" in
 
-  (* let kvs_arr  = y in *)
-  let n        = Array.length kvs_arr in
+  let n         = Array.length kvs_arr in
   let n_buckets = max 1 n in
   let h1        = make_hash () in
 
@@ -220,15 +212,16 @@ let build (kvs: value) =
     !p
   in
 
-  (* ---- Level 2: find collision-free h2 per bucket ----
-     Always iterate all n keys for every bucket.
-     Non-belonging keys are marked -1 as sentinel. *)
+  (* ---- Level 2: find collision-free h2 per bucket ---- *)
+  (* Use 'length' to determine if its a valid key *)
+  (* Use another array/pair instead of using '-1' *)
   let h2s = Array.make n_buckets (make_hash ()) in
   for i = 0 to n_buckets - 1 do
     let keys = Array.make n (-1) in
     for j = 0 to n - 1 do
-      (* let k = fst kvs_arr.(j) in *)
-      let k = 0 in
+      let k = match kvs_arr.(j) with
+        | PairVal{data=(IntVal{value;_}, _);_} -> value
+        | _ -> raise @@ PerfectHashFatal "map elements must be pairs with int keys" in
       let belongs = Bool.to_int (apply_hash h1 n_buckets k = i) in
       keys.(j) <- (belongs * k) + ((1 lxor belongs) * (-1))
     done;
@@ -244,14 +237,17 @@ let build (kvs: value) =
   (* ---- Write each KV pair to its ORAM address ----
      Obliviously select h2 by scanning all buckets. *)
   for j = 0 to n - 1 do
-    (* let k, v = kvs_arr.(j) in *)
-    let k, _v = 0,1 in
+    let k, pair = match kvs_arr.(j) with
+      | PairVal{data=(IntVal{value=k;_}, _);_} as p -> k, p
+      | _ -> raise @@ PerfectHashFatal "map elements must be pairs with int keys" in
     let target_i = apply_hash h1 n_buckets k in
     let h2       = oblivious_array_access h2s target_i n_buckets in
     let slot     = apply_hash h2 bucket_size k in
-    let _addr     = target_i * bucket_size + slot in
-    (* ORAM.write oram addr (encode_slot ~block_size k v) *)
-    ()
+    let addr     = target_i * bucket_size + slot in
+    let b        = Bytes.make block_size '\x00' in
+    let vb       = to_bytes pair in
+    Bytes.blit vb 0 b 0 (min (Bytes.length vb) block_size);
+    ORAM.write oram addr b
   done;
 
   { oram; h1; h2s; n_buckets; bucket_size; block_size }
@@ -260,16 +256,30 @@ let build (kvs: value) =
 (* Lookup — always exactly 2 ORAM accesses                            *)
 (* ------------------------------------------------------------------ *)
 
-let lookup t key =
+let set_err (v: value) error : value =
+  match v with
+  | IntVal {value; _} -> IntVal {error; value}
+  | PointerVal {addr; _} -> PointerVal {error; addr}
+  | PathVal {size;addr; _} -> PathVal {error; size; addr}
+  | StringVal {length; data; _} -> StringVal {error; length; data}
+  | ArrayVal {length; data; _} -> ArrayVal {error; length; data}
+  | PairVal{data;_} -> PairVal{error; data}
+   | _ -> raise @@ InterpFatal "set_err not impl"
+
+let lookup t key value_type  =
   let i    = apply_hash t.h1 t.n_buckets key in
   let h2   = oblivious_array_access t.h2s i t.n_buckets in
   let slot = apply_hash h2 t.bucket_size key in
   let addr = i * t.bucket_size + slot in
-  let _b    = ORAM.read t.oram addr in
-  (* match decode_slot t.value_type b with
-  | Some (k, v) when k = key -> Some v *)
-  (* | _ ->  *)
-  None
+  let b    = ORAM.read t.oram addr in
+
+  (* TODO: make err oblivious *)
+  match from_bytes (pair_ty value_type) b with
+  | PairVal{data=(IntVal{value=k;_}, v); _} -> 
+    if (k != key) then set_err v 1
+    else v
+  | _ ->
+    raise @@ PerfectHashFatal "could not retrieve"
 
 (* ------------------------------------------------------------------ *)
 (* Update                                                               *)
@@ -285,33 +295,34 @@ let update t key value =
 (* ------------------------------------------------------------------ *)
 (* Tests                                                                *)
 (* ------------------------------------------------------------------ *)
-(* 
-let test () =
+ 
+(* let test () =
   Printf.printf "=== Perfect Hash ORAM tests ===\n%!";
-
   let make_int v = IntVal{error=0; value=v} in
-  let block_size  = 25 in
-  let bucket_size = 32 in
+  let make_pair k v = PairVal{error=0; data=(make_int k, v)} in
 
-  let kvs = List.init 10 (fun i -> (i, make_int (i * 10))) in
-  let t   = build ~block_size ~value_type:Ty.INT ~bucket_size kvs in
+  let kvs = ArrayVal{
+    error=0;
+    length=10;
+    data=Array.init 10 (fun i -> make_pair i (make_int (i * 10)))
+  } in
+
+  let t = build kvs in
 
   for i = 0 to 9 do
-    assert (lookup t i = Some (make_int (i * 10)))
+    assert (lookup t i Ty.INT = Some (make_int (i * 10)))
   done;
-  assert (lookup t 99 = None);
-  Printf.printf "PASS: basic lookup\n%!";
+  assert (lookup t 99 Ty.INT = None);
 
   update t 5 (make_int 999);
-  assert (lookup t 5 = Some (make_int 999));
-  assert (lookup t 4 = Some (make_int 40));
-  Printf.printf "PASS: update\n%!";
+  assert (lookup t 5 Ty.INT = Some (make_int 999));
+  assert (lookup t 4 Ty.INT = Some (make_int 40));
 
   for _ = 1 to 20 do
-    assert (lookup t 3 = Some (make_int 30))
+    assert (lookup t 3 Ty.INT = Some (make_int 30))
   done;
   Printf.printf "PASS: repeated lookups stable\n%!";
 
-  Printf.printf "All tests passed.\n%!" *)
+  Printf.printf "All tests passed.\n%!"
 
-(* let () = test () *)
+let () = test () *)

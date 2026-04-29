@@ -1,0 +1,31 @@
+TEST
+local channel STR: string@{h};
+local channel INT: err(int@{h});
+
+var a: int@{h}[]@{h} = [1; 2];
+var b: err(int@{h}) = 0;
+
+START@{} (ignored: int@{}) {
+    output(STR, "Original values:");
+
+    output(STR, "a");
+    output(INT, a[1]);
+    output(STR, "b");
+    output(INT, b);
+    
+    b = a[1];
+
+    output(STR, "b = a[1]:");
+    output(INT, b);
+    
+    a[1] = 200;
+    output(STR, "a[1] = 200:");
+    output(INT, a[1]);
+    
+    output(STR, "b (untouched):");
+    output(INT, b);
+
+    output(STR, "ok");
+
+    exit();
+}
