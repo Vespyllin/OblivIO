@@ -4,10 +4,11 @@ local channel STR: err(string@{h});
 local channel INT: err(int@{h});
 
 var c: map((int@{h} * int@{h})@{h})@{} = makemap([(1,2); (2,3); (3,4)]);
-var d: int@{h} = 0;
+var d: err(int@{h}) = 0;
 
 START@{} (ignored: int@{}) {
-    d = c[[502]];
+    c[[1]] = 100;
+    d = c[[1]];
     output(INT, d);
     output(STR, "ok");
 

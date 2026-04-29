@@ -300,11 +300,11 @@ and transVar ({err;_} as ctxt) =
         | T.MAP t ->
           begin match T.base t with
           | T.PAIR (fst_ty, snd_ty) -> 
+              (* TODO: what's going on with the levels here? *)
+              let res_type = Ty.Type{base=T.base snd_ty; errable=true; level=Ty.level snd_ty} in
               checkAssignable ety fst_ty err pos;
               let klvl = (Ty.level fst_ty) in
-              (* if not (L.flows_to elvl klvl)
-              then Err.error err pos @@ "key level does not flow to map key level: " ^ L.to_string elvl ^ " to " ^ L.to_string klvl; *)
-              raiseTo snd_ty (L.lub klvl elvl)
+              raiseTo res_type (L.lub klvl elvl)
           | _ -> errTy err pos @@ "map value type must be a pair, got: " ^ T.to_string vty
           end
         | _ -> errTy err pos @@ "variable is not a map type: " ^ T.to_string vty in
