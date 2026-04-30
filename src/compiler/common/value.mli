@@ -1,3 +1,4 @@
+module H = Hashtbl
 
 type hash_fn = { a: int; b: int }
 
@@ -19,8 +20,8 @@ type value =
   | ArrayVal of {error: int; length: int; data: value array}
   | PointerVal of {error: int; addr: int}
   | PathVal of {error: int; size: int; addr: int}
-  | MapVal of {error: int; data: perfect_hash_state}
-
+  | OMapVal of {error: int; data: perfect_hash_state}
+  | PMapVal of {error: int; data: (int, value) H.t}
 
 val to_string: value -> string
 

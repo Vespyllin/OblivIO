@@ -1,4 +1,5 @@
 module T = Thread
+module H = Hashtbl
 module M = Common.Message
 module L = Common.Level
 module A = Common.Tabsyn
@@ -9,8 +10,6 @@ module C = Common.Channel
 module Heap = Common.Heap
 module PathORAM = Common.Path_oram
 module ORAMMap = Common.Perfectmap
-
-module H = Hashtbl
 
 open Common.Value
 open Common.Oper
@@ -78,7 +77,6 @@ let _string = function
   | StringVal{data;_} -> data |> Array.to_seq |> String.of_seq
   | _ -> raise @@ InterpFatal "_I"
 
-(* TODO: THIS IS WRONG! NOT GUARANTEED TO HAVE ZEROED OUT CHAR ARRAY! *)
 let safeConcat l (arr1 : char array) (arr2 : char array) =
   let l1 = Array.length arr1 in
   let l2 = Array.length arr2 in
@@ -149,7 +147,6 @@ let rec unsafeEq v1 v2 =
     with Unequal -> 0
     end
   | PairVal{data=(a1,a2);_}, PairVal {data=(b1,b2);_} ->
-    (* TODO: fix? *)
     unsafeEq a1 b1 * safeEq a2 b2
   | ArrayVal{length=l1;data=d1;_}, ArrayVal{length=l2;data=d2;_} ->
     begin
@@ -217,10 +214,6 @@ let rec unsafeEq v1 v2 =
         for i = 0 to arrlen1-1 do
           data.(i) <- _S d1.(i) d2.(i)
         done;
-        (* TODO: Set dummy err vals to 0? *)
-        (* for i = 0 to arrlen2-1 do *)
-          (* data.(i) <- _S d1.(i) d2.(i) *)
-        (* done; *)
         ArrayVal{error=err; length; data}
       | _, arrlen2 ->
         let length = ((1 lxor bit)*l1) lor (bit*l2) in
@@ -233,14 +226,39 @@ let rec unsafeEq v1 v2 =
     | _ -> raise @@ InterpFatal ("safeSelect: " ^ (V.to_string orig) ^  ", " ^ (V.to_string upd)) in
   _S orig upd
 
+let set_error (v: value) error : value =
+  match v with
+  | IntVal {value; _} -> IntVal {error; value}
+  | PointerVal {addr; _} -> PointerVal {error; addr}
+  | PathVal {size;addr; _} -> PathVal {error; size; addr}
+  | StringVal {length; data; _} -> StringVal {error; length; data}
+  | ArrayVal {length; data; _} -> ArrayVal {error; length; data}
+  | PairVal{data;_} -> PairVal{error; data}
+  | _ -> raise @@ InterpFatal "set_error not impl"
+
 let get_error = function
   | IntVal {error; _} -> error
-  | StringVal {error; _} -> error
   | PointerVal {error; _} -> error
+  | PathVal {error; _} -> error
+  | StringVal {error; _} -> error
   | ArrayVal {error; _} -> error
-  | _ -> 0
+  | PairVal{error;_} -> error
+  | _ -> raise @@ InterpFatal "get_err not impl"
 
-(* TODO: ERROR HANDLING *)
+let safeConcatArr (arr1: value) (arr2: value) =
+  (* TODO Check if sub is oblivious here *)
+  match arr1, arr2 with
+  | ArrayVal{error=e1; length=l1; data=d1}, ArrayVal{error=e2; length=l2; data=d2} ->
+    let err = e1 lor e2 in
+    let real1 = Array.sub d1 0 l1 in
+    let real2 = Array.sub d2 0 l2 in
+    let dummy1 = Array.sub d1 l1 (Array.length d1 - l1) in
+    let dummy2 = Array.sub d2 l2 (Array.length d2 - l2) in
+    let data = Array.concat [real1; real2; dummy1; dummy2] in
+    ArrayVal{error=err; length=l1+l2; data}
+  | _ -> raise @@ InterpFatal "safeConcatArr: expected two arrays"
+
+
 let op oper v1 v2 =
   match oper,v1,v2 with
   (* POLY *)
@@ -277,8 +295,8 @@ let op oper v1 v2 =
   | CaretOp, StringVal {error=e1;length=l1;data=d1}, StringVal {error=e2;length=l2;data=d2} ->
     StringVal {error=e1 lor e2;length=l1+l2; data=safeConcat l1 d1 d2}
   (* ARRAY *)
-  (* | CaretOp, ArrayVal {length=l1;data=d1}, ArrayVal {length=l2;data=d2} -> *)
-    (* ArrayVal {length=l1+l2; data=(safeConcatArr l1 d1 d2)} *)
+  | CaretOp, (ArrayVal _ as v1), (ArrayVal _ as v2) ->
+    safeConcatArr v1 v2
   | CoalesceOp, a, b ->
     safeSelect (get_error a) a b
   | _ -> raise @@ NotImplemented (V.to_string v1 ^ to_string oper ^ V.to_string v2)
@@ -419,24 +437,7 @@ let get_byte_size (v: value) : int =
   | ArrayVal {data; _} -> 3 + Array.length data * fixed_size
   | _ -> raise @@ InterpFatal "get_byte_size not impl"
 
-let set_err (v: value) error : value =
-  match v with
-  | IntVal {value; _} -> IntVal {error; value}
-  | PointerVal {addr; _} -> PointerVal {error; addr}
-  | PathVal {size;addr; _} -> PathVal {error; size; addr}
-  | StringVal {length; data; _} -> StringVal {error; length; data}
-  | ArrayVal {length; data; _} -> ArrayVal {error; length; data}
-  | PairVal{data;_} -> PairVal{error; data}
-   | _ -> raise @@ InterpFatal "set_err not impl"
 
-let get_error = function
-  | IntVal {error; _} -> error
-  | PointerVal {error; _} -> error
-  | PathVal {error; _} -> error
-  | StringVal {error; _} -> error
-  | ArrayVal {error; _} -> error
-  | PairVal{error;_} -> error
-  | _ -> raise @@ InterpFatal "get_err not impl"
 
 let rec deep_copy = function
   | IntVal {error; value} -> IntVal {error; value}
@@ -477,7 +478,7 @@ let rec readvar ctxt =
               elem_err := (right_idx * get_error rec_res) lor (lnot right_idx * !elem_err)
             done;
             let new_err = Bool.to_int(idx >= length lor error lor !elem_err) in
-            set_err (deep_copy (!safe_value)) new_err
+            set_error (deep_copy (!safe_value)) new_err
         | _ -> raise @@ InterpFatal "readVar"
         in
       unwrap_indices access_path v
@@ -492,18 +493,17 @@ let rec readvar ctxt =
       let A.Var{ty;_} = var in
       let key = eval ctxt exp in
       let value_type = match Ty.base ty with
-      | Ty.MAP t ->
-        begin match Ty.base t with
-        | Ty.PAIR (_, snd_ty) -> Ty.base snd_ty
-        | _ -> raise @@ InterpFatal "MapVar: map type is not a pair"
-        end
-      | _ -> raise @@ InterpFatal "MapVar: not a map type" in
-
+        | Ty.OMAP (_, vt) -> vt
+        | Ty.PMAP (_, vt) -> vt
+        | _ -> raise @@ InterpFatal "MapVar: not a map type" in
       begin match map_val with
-      | MapVal{error; data=map} ->
+      | OMapVal{error; data=map} ->
         let key_int = _int key in
         let correct_key = (((error lxor 1) * key_int) lor (error * 0)) in
         ORAMMap.lookup map correct_key value_type
+      | PMapVal{data=map;_} ->
+        let key_int = _int key in
+        H.find map key_int 
       | _ -> raise @@ InterpFatal "MapVar: not a map"
       end
     | A.HeapVar {var} ->
@@ -585,7 +585,7 @@ and writevar ctxt updkind upd mode =
       let map_val = readvar ctxt var in
       let key = eval ctxt exp in
       begin match map_val with
-      | MapVal{error; data=map} ->
+      | OMapVal{error; data=map} ->
         let key_int = _int key in
         let correct_key = (((error lxor 1) * key_int) lor (error * 0)) in
         
@@ -594,13 +594,23 @@ and writevar ctxt updkind upd mode =
           raise @@ InterpFatal "MapVar: bind not impl"
           (* let old_val = match ORAMMap.lookup map correct_key with
             | Some v -> v
-            | None -> set_err (IntVal{error=0; value=0}) 1 in
+            | None -> set_error (IntVal{error=0; value=0}) 1 in
           ORAMMap.update map correct_key (safeSelect mode old_val upd) *)
         | _ ->
           if mode = 1 then ORAMMap.update map correct_key upd
         end
-      | _ -> raise @@ InterpFatal "MapVar: not a map"
-      end
+        | PMapVal{data=map;_} ->
+          let key_int = _int key in
+          let old_val = H.find map key_int in
+
+          begin match updkind, ctxt.unsafe with
+          | BIND, false ->
+            H.replace map key_int (safeSelect mode old_val upd)
+          | _ ->
+            if mode = 1 then H.replace map key_int upd
+          end
+        | _ -> raise @@ InterpFatal "MapVar: not a map"
+        end
 
     | A.HeapVar {var} ->
       let error, addr, size, oram = match readvar ctxt var with
@@ -653,8 +663,8 @@ and eval ctxt =
       let v = _E exp in
       begin
         match proj,v with
-        | A.Fst, PairVal{error; data=(a,_)} -> set_err a error
-        | A.Snd, PairVal{error; data=(_,b)} -> set_err b error
+        | A.Fst, PairVal{error; data=(a,_)} -> set_error a error
+        | A.Snd, PairVal{error; data=(_,b)} -> set_error b error
         | _ -> raise @@ InterpFatal __LOC__
       end
     | A.SizeExp exp ->
@@ -672,13 +682,28 @@ and eval ctxt =
       let length = List.length arr in
       let data = arr |> List.map (fun e -> _E e) |> Array.of_list in
       ArrayVal {error=0;length;data}
-    | A.MapExp arr -> 
+    | A.OMapExp arr -> 
       let v = _E arr in
       begin match v with
       | ArrayVal _ ->
-        MapVal {error=0; data=ORAMMap.build v}
-      | _ -> raise @@ InterpFatal "MapExp: expected array of pairs"
+        OMapVal {error=0; data=ORAMMap.build v}
+      | _ -> raise @@ InterpFatal "OMapExp: expected array of pairs"
       end
+    | A.PMapExp arr -> 
+      let v = _E arr in
+      begin match v with
+      | ArrayVal {error; length; data} ->
+        let x = H.create length in
+        for i = 0 to length - 1 do
+          begin match data.(i) with
+          | PairVal{data=(IntVal{value=k;_}, v);_} ->
+            H.replace x k v
+          | _ -> raise @@ InterpFatal "PMapExp: expected array of pairs with int keys"
+          end
+        done;
+        PMapVal{error; data=x}
+  | _ -> raise @@ InterpFatal "PMapExp: expected array of pairs"
+  end
     | A.NilExp -> 
       PointerVal{error=0;addr=0}
     | A.AllocExp e ->

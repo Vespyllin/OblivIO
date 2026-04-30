@@ -1,7 +1,7 @@
 module ORAM = Path_oram
+module H = Hashtbl
 
 type hash_fn = { a: int; b: int }
-
 
 type perfect_hash_state =
   { oram        : Path_oram.state
@@ -19,7 +19,8 @@ type value =
 | ArrayVal of {error: int; length: int; data: value array}
 | PointerVal of {error: int; addr: int}
 | PathVal of {error: int; size: int; addr: int}
-| MapVal of {error: int; data: perfect_hash_state}
+| OMapVal of {error: int; data: perfect_hash_state}
+| PMapVal of {error: int; data: (int, value) H.t}
 
 let rec to_string = function
   | StringVal {error; length;data} ->
@@ -48,7 +49,8 @@ let rec to_string = function
   | PathVal {error;size;addr} ->
       if error = 1 then "ErrPtr" else
       "path(" ^ string_of_int addr ^ ")[" ^ string_of_int size ^ "]"
-  | MapVal _ -> "map"
+  | OMapVal _ -> "omap"
+  | PMapVal _ -> "pmap"
 
 let rec size = function 
   | IntVal _                                    ->    8
@@ -57,4 +59,5 @@ let rec size = function
   | ArrayVal {data;  _}            ->    8 + (8*Array.length data)
   | PointerVal _                                ->    8
   | PathVal _                                   ->    8
-  | MapVal _                                    ->    -1
+  | OMapVal _                                    ->    -1
+  | PMapVal _                                    ->    -1

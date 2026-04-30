@@ -203,6 +203,7 @@ let build (kvs: value) =
     let log2n = max 1 (int_of_float (log (float_of_int n) /. log 2.0)) in
     max 4 (log2n * log2n) in
 
+  (* TODO: Separate key and value *)
   let block_size = Array.fold_left (fun acc v -> max acc (get_byte_size v)) 0 kvs_arr in
 
   let capacity =

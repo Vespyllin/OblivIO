@@ -63,7 +63,10 @@ rule token = parse
 | "string"            { STRINGTYPE }
 | "ptr"               { PTRTYPE }
 | "path"              { PATHTYPE }
-| "map"               { MAPTYPE }
+| "make_pmap"          { PMAP }
+| "make_omap"          { OMAP }
+| "omap"              { OMAPTYPE }
+| "pmap"              { PMAPTYPE }
 | "err"               { ERRTYPE }
 | "input"             { INPUT }
 | "output"            { OUTPUT }
@@ -71,7 +74,6 @@ rule token = parse
 | "alloc"             { ALLOC }
 | "oram"              { ORAM }
 | "array"             { ARRAY }
-| "makemap"           { MAP }
 | "nil"               { NIL }
 | "onil"              { ONIL }
 | "_"                 { UNDERSCORE }

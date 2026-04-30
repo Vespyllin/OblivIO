@@ -18,8 +18,8 @@
 %token AND OR ASSIGN BIND IF THEN ELSE WHILE DO
 %token SKIP OBLIF SEND INPUT OUTPUT
 %token INTTYPE STRINGTYPE
-%token PTRTYPE ERRTYPE UNDERSCORE PATHTYPE MAPTYPE
-%token ALLOC ORAM NIL ONIL ARRAY MAP
+%token PTRTYPE ERRTYPE UNDERSCORE PATHTYPE OMAPTYPE PMAPTYPE
+%token ALLOC ORAM NIL ONIL ARRAY OMAP PMAP
 %token COALESCE
 
 %left OR
@@ -96,8 +96,10 @@ exp_base:
   { ArrayExp arr}
 | ARRAY LPAREN length=INT COMMA value=exp RPAREN
   { ArrayConstructorExp {value;length}}
-| MAP LPAREN value=brack(slist(SEMICOLON,exp)) RPAREN
-  { MapExp value}
+| OMAP LPAREN value=brack(slist(SEMICOLON,exp)) RPAREN
+  { OMapExp value}
+| PMAP LPAREN value=brack(slist(SEMICOLON,exp)) RPAREN
+  { PMapExp value}
 | ALLOC LPAREN exp=exp RPAREN
   { AllocExp exp }
 | ORAM LPAREN exp=exp COMMA size=INT RPAREN
@@ -158,8 +160,10 @@ basetype:
   { T.POINTER t }
 | PATHTYPE LPAREN t=type_at_lvl RPAREN LBRACK s=INT RBRACK
   { T.PATH (t, s) }
-| MAPTYPE LPAREN t=type_at_lvl RPAREN
-  { T.MAP t }
+| OMAPTYPE LPAREN k=basetype COMMA v=basetype RPAREN 
+  { T.OMAP (k,v) }
+| PMAPTYPE LPAREN k=basetype COMMA v=basetype RPAREN
+  { T.PMAP (k,v) }
 
 %inline type_at_lvl:
 | base=basetype AT level=lvl  { T.Type{base;errable=false;level} }

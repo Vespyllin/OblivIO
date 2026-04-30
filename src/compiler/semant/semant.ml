@@ -138,8 +138,12 @@ let rec checkAssignable ?self value dest err pos =
   | T.PATH (t_value, s1), T.PATH (t_dest, s2) ->
     if (s1 != s2) then Err.error err pos @@ "cannot assign paths of different sizes: " ^ string_of_int s1 ^ " to " ^ string_of_int s2;
     checkAssignable ?self t_value t_dest err pos
-  | T.MAP t_value, T.MAP t_dest ->
-    checkAssignable ?self t_value t_dest err pos
+  | T.OMAP (t_k, t_v), T.OMAP (d_k, d_v) ->
+    checkAssignable ?self (T.Type{base=t_k;errable=false;level=L.bottom}) (T.Type{base=d_k;errable=false;level=L.bottom}) err pos;
+    checkAssignable ?self (T.Type{base=t_v;errable=false;level=L.bottom}) (T.Type{base=d_v;errable=false;level=L.bottom}) err pos
+  | T.PMAP (t_k, t_v), T.PMAP (d_k, d_v) ->
+    checkAssignable ?self (T.Type{base=t_k;errable=false;level=L.bottom}) (T.Type{base=d_k;errable=false;level=L.bottom}) err pos;
+    checkAssignable ?self (T.Type{base=t_v;errable=false;level=L.bottom}) (T.Type{base=d_v;errable=false;level=L.bottom}) err pos
 
   | b1, b2 -> Err.error err pos @@ "cannot assign expression of type " ^ Ty.base_to_string b1 ^ " to variable of type " ^ Ty.base_to_string b2
 
@@ -197,9 +201,18 @@ let rec transExp ({err;_} as ctxt) =
           checkComparable lty rty err pos;
           Ty.INT, (Ty.errable lty || Ty.errable rty)
         | CaretOp ->
-          checkString lty err pos;
-          checkString rty err pos;
-          Ty.STRING, (Ty.errable lty || Ty.errable rty)
+          begin match T.base lty, T.base rty with
+          | T.STRING, T.STRING ->
+            checkString lty err pos;
+            checkString rty err pos;
+            Ty.STRING, (Ty.errable lty || Ty.errable rty)
+          | T.ARRAY t1, T.ARRAY _ ->
+            checkBaseType lty rty err pos;
+            Ty.ARRAY t1, (Ty.errable lty || Ty.errable rty)
+          | _ ->
+            Err.error err pos "caret operator requires two strings or two arrays";
+            Ty.STRING, false
+          end
         in
       OpExp{left;oper;right} ^! Ty.Type{base;errable;level}
     | ProjExp {proj;exp} -> 
@@ -234,7 +247,7 @@ let rec transExp ({err;_} as ctxt) =
       let e, ty = e_ty @@ transExp ctxt value in
       let base = T.ARRAY ty in
       ArrayExp (List.init length (fun _ -> e)) ^! T.Type{base;errable=false;level=L.bottom}
-    | MapExp t ->
+    | OMapExp t ->
       let ty = match t with
       | hd::_ ->
         let _, ty = e_ty @@ transExp ctxt hd in
@@ -254,8 +267,36 @@ let rec transExp ({err;_} as ctxt) =
       let elems = List.map f t in
       let arr_ty = T.Type{base=T.ARRAY ty;errable=false;level=L.bottom} in
       let arr_exp = ArrayExp elems ^! arr_ty in
-      let base = T.MAP ty in
-      MapExp arr_exp ^! T.Type{base;errable=false;level=L.bottom}
+      let base = match T.base ty with
+        | T.PAIR (kt, vt) -> T.OMAP (T.base kt, T.base vt)
+        | _ -> raise @@ NotImplemented "OMapExp: expected pair type" in
+      OMapExp arr_exp ^! T.Type{base;errable=false;level=L.bottom}
+
+    | PMapExp t ->
+      let ty = match t with
+      | hd::_ ->
+        let _, ty = e_ty @@ transExp ctxt hd in
+        begin match T.base ty with
+        | T.PAIR _ -> ty
+        | _ -> errTy err pos @@ "map elements must be pairs, got: " ^ T.to_string ty
+        end
+      | [] ->
+        T.Type{base=T.PAIR(
+          T.Type{base=Ty.ANY;errable=false;level=L.bottom},
+          T.Type{base=Ty.ANY;errable=false;level=L.bottom}
+        );errable=false;level=L.bottom} in
+      let f exp =
+        let e,ety = e_ty @@ transExp ctxt exp in
+        checkBaseType ty ety err pos;
+        e in
+      let elems = List.map f t in
+      let arr_ty = T.Type{base=T.ARRAY ty;errable=false;level=L.bottom} in
+      let arr_exp = ArrayExp elems ^! arr_ty in
+      let base = match T.base ty with
+        | T.PAIR (kt, vt) -> T.PMAP (T.base kt, T.base vt)
+        | _ -> raise @@ NotImplemented "PMapExp: expected pair type" in
+      PMapExp arr_exp ^! T.Type{base;errable=false;level=L.bottom}
+
     | NilExp -> NilExp ^! _bot (T.POINTER (T.Type{base=T.ANY;errable=false;level=L.bottom}))
     | OnilExp size -> OnilExp size ^! _bot (T.PATH ((T.Type{base=T.ANY;errable=false;level=L.bottom}), size))
     | AllocExp p -> 
@@ -294,19 +335,21 @@ and transVar ({err;_} as ctxt) =
       | STORE -> SubscriptVar{var;exp} ^@ cty
       end
     | MapVar {var;exp} ->
-      let var, vty, _, loc = v_ty_lvl_loc @@ trvar var in
+      let var, vty, vlvl, loc = v_ty_lvl_loc @@ trvar var in
       let exp, ety, elvl = e_ty_lvl @@ transExp ctxt exp in
       let cty = match T.base vty with
-        | T.MAP t ->
-          begin match T.base t with
-          | T.PAIR (fst_ty, snd_ty) -> 
-              (* TODO: what's going on with the levels here? *)
-              let res_type = Ty.Type{base=T.base snd_ty; errable=true; level=Ty.level snd_ty} in
-              checkAssignable ety fst_ty err pos;
-              let klvl = (Ty.level fst_ty) in
-              raiseTo res_type (L.lub klvl elvl)
-          | _ -> errTy err pos @@ "map value type must be a pair, got: " ^ T.to_string vty
-          end
+        | T.OMAP (kt, vt) ->
+          let fst_ty = T.Type{base=kt;errable=false;level=L.bottom} in
+          let snd_ty = T.Type{base=vt;errable=false;level=L.bottom} in
+          checkAssignable ety fst_ty err pos;
+          let res_type = snd_ty in
+          raiseTo res_type (L.lub vlvl elvl)
+        | T.PMAP (kt, vt) ->
+          let fst_ty = T.Type{base=kt;errable=false;level=L.bottom} in
+          let snd_ty = T.Type{base=vt;errable=false;level=L.bottom} in
+          checkAssignable ety fst_ty err pos;
+          let res_type = snd_ty in
+          raiseTo res_type (L.lub vlvl elvl)
         | _ -> errTy err pos @@ "variable is not a map type: " ^ T.to_string vty in
       begin
       match loc with
@@ -477,31 +520,35 @@ let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
       | _ -> Err.error err pos "datatype is not supported in ORAM"
     in
     let rec checkPtrLevels ty =
-    match T.base ty with
-    | T.SELF _ -> ()
-    | T.POINTER cell ->
-      if not @@ L.flows_to (T.level ty) (T.level cell)
-      then Err.error err pos @@ "pointer cannot be more privileged than pointee";
-
-      checkPtrLevels cell
-    | T.PATH (block, _) ->
-      if L.flows_to (T.level ty) L.bottom
-      then Err.error err pos @@ "path cannot be public";
-
-      begin match T.base block with
+      match T.base ty with
       | T.SELF _ -> ()
-      | _ ->
-        if not @@ L.flows_to (T.level ty) (T.level block) 
-        then Err.error err pos @@ "path cannot be more privileged than block";
-        checkPtrLevels block;
-      end;
-      checkOramCompatibleTypes ty;
-    | T.ARRAY content ->
-      if not @@ L.flows_to (T.level ty) (T.level content)
-      then Err.error err pos @@ "array content cannot be more privileged than array";
-    | _ -> ()
-  in
-  checkPtrLevels ty;
+      | T.POINTER cell ->
+        if not @@ L.flows_to (T.level ty) (T.level cell)
+        then Err.error err pos @@ "pointer cannot be more privileged than pointee";
+        checkPtrLevels cell
+      | T.PATH (block, _) ->
+        if L.flows_to (T.level ty) L.bottom
+        then Err.error err pos @@ "path cannot be public";
+        begin match T.base block with
+        | T.SELF _ -> ()
+        | _ ->
+          if not @@ L.flows_to (T.level ty) (T.level block) 
+          then Err.error err pos @@ "path cannot be more privileged than block";
+          checkPtrLevels block;
+        end;
+        checkOramCompatibleTypes ty;
+      | T.ARRAY content ->
+        if not @@ L.flows_to (T.level ty) (T.level content)
+        then Err.error err pos @@ "array content cannot be more privileged than array";
+      | T.OMAP (_, _) ->
+        if L.flows_to (T.level ty) L.bottom
+        then Err.error err pos "omap variable cannot be public"
+      | T.PMAP (_, _) ->
+        if not (L.flows_to (T.level ty) L.bottom)
+        then Err.error err pos "pmap variable must be public"
+      | _ -> ()
+    in
+    checkPtrLevels ty;
     VarDecl{x;ty;init;pos}
   | A.NetworkChannelDecl {channel;level;potential;ty;pos} ->
     if H.mem lambda channel
