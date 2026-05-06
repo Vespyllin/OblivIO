@@ -48,5 +48,3 @@ let rec base_to_string = function
 and to_string (Type{base;errable;level}) =
   String.concat ""
     [if errable then "err(" else ""; base_to_string base; "@"; L.to_string level; if errable then ")" else "";]
-  
-  

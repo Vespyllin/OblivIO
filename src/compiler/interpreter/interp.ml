@@ -7,9 +7,11 @@ module V = Common.Value
 module Ty = Common.Types
 module Tr = Common.Trace
 module C = Common.Channel
+module S = Common.Serialize
 module Heap = Common.Heap
-module PathORAM = Common.Path_oram
+module RustOram = ORAM.Rust_oram
 module ORAMMap = Common.Perfectmap
+
 
 open Common.Value
 open Common.Oper
@@ -30,7 +32,7 @@ type context =
   ; memory: (string, value) H.t
   ; store: (string, value) H.t
   ; heap: Heap.t
-  ; oram: (int, PathORAM.state) H.t
+  ; oram: (int, RustOram.oram_state) H.t
   ; handlers: (string, handler_info) H.t
   ; trust_map: (C.channel, L.level * Ty.ty) H.t
   ; server: server_info
@@ -161,7 +163,7 @@ let rec unsafeEq v1 v2 =
     end
   | _ -> raise @@ NotImplemented "unsafeEq"
 
-  let safeSelect (bit: int) (orig: value) (upd: value) =
+let safeSelect (bit: int) (orig: value) (upd: value) =
   let rec _S orig upd =
     match orig, upd with
     | IntVal {error=e1; value=v1}, IntVal {error=e2; value=v2} ->
@@ -226,24 +228,7 @@ let rec unsafeEq v1 v2 =
     | _ -> raise @@ InterpFatal ("safeSelect: " ^ (V.to_string orig) ^  ", " ^ (V.to_string upd)) in
   _S orig upd
 
-let set_error (v: value) error : value =
-  match v with
-  | IntVal {value; _} -> IntVal {error; value}
-  | PointerVal {addr; _} -> PointerVal {error; addr}
-  | PathVal {size;addr; _} -> PathVal {error; size; addr}
-  | StringVal {length; data; _} -> StringVal {error; length; data}
-  | ArrayVal {length; data; _} -> ArrayVal {error; length; data}
-  | PairVal{data;_} -> PairVal{error; data}
-  | _ -> raise @@ InterpFatal "set_error not impl"
 
-let get_error = function
-  | IntVal {error; _} -> error
-  | PointerVal {error; _} -> error
-  | PathVal {error; _} -> error
-  | StringVal {error; _} -> error
-  | ArrayVal {error; _} -> error
-  | PairVal{error;_} -> error
-  | _ -> raise @@ InterpFatal "get_err not impl"
 
 let safeConcatArr (arr1: value) (arr2: value) =
   (* TODO Check if sub is oblivious here *)
@@ -298,7 +283,7 @@ let op oper v1 v2 =
   | CaretOp, (ArrayVal _ as v1), (ArrayVal _ as v2) ->
     safeConcatArr v1 v2
   | CoalesceOp, a, b ->
-    safeSelect (get_error a) a b
+    safeSelect (V.get_error a) a b
   | _ -> raise @@ NotImplemented (V.to_string v1 ^ to_string oper ^ V.to_string v2)
 
 let op_unsafe oper v1 v2 =
@@ -334,110 +319,6 @@ let op_unsafe oper v1 v2 =
     StringVal {error=e1 lor e2; length=l1+l2; data=Array.append d1' d2'}
   | CoalesceOp, a, _ -> a
   | _ -> raise @@ NotImplemented (V.to_string v1 ^ to_string oper ^ V.to_string v2)
-
-let rec to_bytes (v: value) : bytes =
-  let fixed_size = 11 in
-  match v with
-  | IntVal {error; value} ->
-    (* print_string "to_bytes: writing int\n"; *)
-    let b = Bytes.make fixed_size '\x00' in
-    (* type tag: 1 = int *)
-    Bytes.set_uint8 b 0 1;
-    Bytes.set_uint8 b 1 error;
-    Bytes.set_int64_be b 3 (Int64.of_int value);
-    b
-  | PathVal {error; size; addr} ->
-    (* print_string "to_bytes: writing path\n"; *)
-    let b = Bytes.make fixed_size '\x00' in
-    (* type tag: 3 = path *)
-    Bytes.set_uint8 b 0 3;
-    Bytes.set_uint8 b 1 error;
-    Bytes.set_uint8 b 2 size;
-    Bytes.set_int64_be b 3 (Int64.of_int addr);
-    b
-  | StringVal {error; length; data} ->
-    (* print_string "to_bytes: writing str\n"; *)
-    let b = Bytes.make (3 + Array.length data) '\x00' in
-    (* type tag: 4 = string *)
-    Bytes.set_uint8 b 0 4;
-    Bytes.set_uint8 b 1 error;
-    Bytes.set_uint8 b 2 length;
-    Array.iteri (fun i c -> Bytes.set b (3 + i) c) data;
-    b
-  | ArrayVal {error; length; data} ->
-    (* encode each element and concatenate *)
-    let elems = Array.map to_bytes data in
-    let total = 3 + (Array.length data * fixed_size) in
-    let b = Bytes.make total '\x00' in
-    (* type tag: 5 = array *)
-    Bytes.set_uint8 b 0 5;
-    Bytes.set_uint8 b 1 error;
-    Bytes.set_uint8 b 2 length;
-    Array.iteri (fun i elem -> Bytes.blit elem 0 b (3 + i * fixed_size) fixed_size) elems;
-    b
-  | PairVal {error; data=(v1, v2)} ->
-    let v1d = to_bytes v1 in
-    let v2d = to_bytes v2 in
-    let total = 3 + (2 * fixed_size) in
-    let b = Bytes.make total '\x00' in
-    Bytes.set_uint8 b 0 6;
-    Bytes.set_uint8 b 1 error;
-    Bytes.blit v1d 0 b 3 (Bytes.length v1d);
-    Bytes.blit v2d 0 b (3 + (Bytes.length v1d)) (Bytes.length v2d);
-    b
-  | _ -> raise @@ InterpFatal "to_bytes: unsupported value type"
-
-let rec from_bytes (target_type: Ty.basetype) (b: bytes) : value =
-  let tag = Bytes.get_uint8 b 0 in
-  let error = Bytes.get_uint8 b 1 in
-  match target_type with
-  | Ty.INT ->
-    let value = Int64.to_int (Bytes.get_int64_be b 3) in
-    let error = error lor (Bool.to_int (tag <> 1)) in
-    IntVal {error; value}
-  | Ty.PATH (_, s) ->
-    (* let acq_size = Bytes.get_uint8 b 2 in *)
-    (* if (acq_size != size) then raise @@ InterpFatal ("pointer sizes got mixed up. reading ptr of block size " ^ string_of_int acq_size ^ " when trying to deref ptr of block size" ^ string_of_int s); *)
-    let size = s in
-    let addr = Int64.to_int (Bytes.get_int64_be b 3) in
-    let error = error lor (Bool.to_int (tag <> 3)) in
-    PathVal {error; size; addr}
-  | Ty.STRING ->
-    let length = Bytes.get_uint8 b 2 in
-    let data_len = Bytes.length b - 3 in
-    let data = Array.init data_len (fun i -> Bytes.get b (3 + i)) in
-    let error = error lor (Bool.to_int (tag <> 4)) in
-    StringVal {error; length; data}
-  | Ty.ARRAY inner_ty ->
-    let length = Bytes.get_uint8 b 2 in
-    let num_elems = length in
-    let data = Array.init num_elems (fun i -> from_bytes (Ty.base inner_ty) (Bytes.sub b (3 + i * 11) 11)) in
-    let error = error lor (Bool.to_int (tag <> 5)) in
-    ArrayVal {error; length; data}
-  | Ty.PAIR (v1, v2) ->
-    let error = error lor (Bool.to_int (tag <> 6)) in
-    let v1d =  from_bytes (Ty.base v1) (Bytes.sub b 3 11) in
-    let v2d =  from_bytes (Ty.base v2) (Bytes.sub b (3 + 11) 11) in
-    PairVal {error; data=(v1d,v2d)}
-  | Ty.SELF t -> 
-    begin match !t with
-    | Some x -> from_bytes (Ty.base x) b
-    | None -> raise @@ InterpFatal "uninitialized recursive type";
-    end
-  | _ -> raise @@ InterpFatal ("from_bytes: unsupported target type " ^ (Ty.base_to_string target_type))
-
-let get_byte_size (v: value) : int =
-  let fixed_size = 11 in
-  match v with
-  | IntVal _ -> fixed_size
-  | PointerVal _ -> fixed_size
-  | PathVal _ -> fixed_size
-  | PairVal _ -> 3 + 2 * fixed_size
-  | StringVal {data; _} -> 3 + Array.length data
-  | ArrayVal {data; _} -> 3 + Array.length data * fixed_size
-  | _ -> raise @@ InterpFatal "get_byte_size not impl"
-
-
 
 let rec deep_copy = function
   | IntVal {error; value} -> IntVal {error; value}
@@ -475,7 +356,7 @@ let rec readvar ctxt =
               let right_idx = (Bool.to_int (i lxor idx = 0)) in
               let rec_res = unwrap_indices idx_tl data.(i) in
               safe_value := safeSelect right_idx !safe_value rec_res;
-              elem_err := (right_idx * get_error rec_res) lor (lnot right_idx * !elem_err)
+              elem_err := (right_idx * V.get_error rec_res) lor (lnot right_idx * !elem_err)
             done;
             let new_err = Bool.to_int(idx >= length lor error lor !elem_err) in
             set_error (deep_copy (!safe_value)) new_err
@@ -516,10 +397,10 @@ let rec readvar ctxt =
         if (error = 1 || addr = 0) then raise @@ InterpFatal "readVar: Heap - reading from err/nil";
         deep_copy (Heap.read ctxt.heap addr)
       end else begin
-        if (H.find_opt ctxt.oram size = None) then H.add ctxt.oram size (PathORAM.create ~capacity:16 ~block_size:((size*8) + 3) ~z:4);
+        if (H.find_opt ctxt.oram size = None) then H.add ctxt.oram size (RustOram.create 16 ((size*8) + 3));
         let correct_addr = (((error lxor 1) * addr) lor (error * 0)) in
         let base = Ty.base ty in
-        from_bytes base (PathORAM.read (H.find ctxt.oram size) correct_addr)
+        S.from_bytes base (RustOram.read (H.find ctxt.oram size) correct_addr)
       end
 in _V []
 and writevar ctxt updkind upd mode =
@@ -629,10 +510,10 @@ and writevar ctxt updkind upd mode =
       end else begin
         let correct_addr = (((error lxor 1) * addr) lor (error * 0)) in
         (* TODO *)
-        if (get_byte_size upd > (size * 8) + 3) then
-          raise @@ InterpFatal ("HeapWrite: Value too large. Attempted to write element of size " ^ string_of_int(get_byte_size upd) ^ " into block of size " ^ string_of_int(0));
+        if (S.get_byte_size upd > (size * 8) + 3) then
+          raise @@ InterpFatal ("HeapWrite: Value too large. Attempted to write element of size " ^ string_of_int(S.get_byte_size upd) ^ " into block of size " ^ string_of_int(0));
 
-        if (H.find_opt ctxt.oram size = None) then H.add ctxt.oram size (PathORAM.create ~capacity:16 ~block_size:((size*8) + 3) ~z:4);
+        if (H.find_opt ctxt.oram size = None) then H.add ctxt.oram size (RustOram.create 16 ((size*8) + 3));
 
         match updkind, ctxt.unsafe with
         | BIND, false ->
@@ -642,10 +523,10 @@ and writevar ctxt updkind upd mode =
             | Ty.POINTER t -> Ty.base t
             | _ -> raise @@ InterpFatal "HeapWrite: not a pointer type" in
           
-          let old_val = from_bytes inner_ty (PathORAM.read (H.find ctxt.oram size) correct_addr) in
-          PathORAM.write (H.find ctxt.oram size) correct_addr (to_bytes (safeSelect mode old_val upd))
+          let old_val = S.from_bytes inner_ty (RustOram.read (H.find ctxt.oram size) correct_addr) in
+          RustOram.write (H.find ctxt.oram size) correct_addr (S.to_bytes (safeSelect mode old_val upd))
         | _ ->
-          if mode = 1 then PathORAM.write (H.find ctxt.oram 0) correct_addr (to_bytes upd)
+          if mode = 1 then RustOram.write (H.find ctxt.oram 0) correct_addr (S.to_bytes upd)
       end
 in _V []
 
@@ -718,12 +599,14 @@ and eval ctxt =
       let v = _E e in
       let ptr_size = size*8 + 3 in
 
-      if (get_byte_size v > ptr_size) then 
-        raise @@ InterpFatal ("HeapWrite: Value too large. Attempted to write element of size " ^ string_of_int(get_byte_size v) ^ " into block of size " ^ string_of_int(ptr_size));
+      if (S.get_byte_size v > ptr_size) then 
+        raise @@ InterpFatal ("HeapWrite: Value too large. Attempted to write element of size " ^ string_of_int(S.get_byte_size v) ^ " into block of size " ^ string_of_int(ptr_size));
 
-      if (H.find_opt ctxt.oram size = None) then H.add ctxt.oram size (PathORAM.create ~capacity:16 ~block_size:ptr_size ~z:4);
-      let addr = PathORAM.alloc (H.find ctxt.oram size) (to_bytes v) in 
-      PathVal{error=0; size; addr}
+      if (H.find_opt ctxt.oram size = None) then H.add ctxt.oram size (RustOram.create 16 ptr_size);
+      (* let addr = RustOram.alloc (H.find ctxt.oram size) (S.to_bytes v) in  *)
+      (* let addr = 0 in  *)
+      raise @@ InterpFatal "Alloc not impl";
+      (* PathVal{error=0; size; addr} *)
       
   in _E
 
@@ -929,8 +812,8 @@ let interp ?(unsafe=false) print_when print_what (A.Prog{node;decls;hls}) =
     ; trace = Tr.empty_trace print_when print_what
     } in
 
-  (* PathORAM.create ~capacity:16 ~block_size:32 ~z:4 *)
-  (* H.add ctxt.oram 0 (PathORAM.create ~capacity:16 ~block_size:0 ~z:4); *)
+  (* RustOram.create ~capacity:16 ~block_size:32 ~z:4 *)
+  (* H.add ctxt.oram 0 (RustOram.create ~capacity:16 ~block_size:0 ~z:4); *)
 
   let f (A.Hl{handler;x;body;_}) =
     H.add ctxt.handlers handler {x;body} in

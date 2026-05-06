@@ -167,11 +167,11 @@ basetype:
 
 %inline type_at_lvl:
 | base=basetype AT level=lvl  { T.Type{base;errable=false;level} }
+| ERRTYPE LPAREN base=basetype RPAREN AT level=lvl  { T.Type{base; errable=true; level} }
 | UNDERSCORE                  { let self = ref None in T.Type{base=(T.SELF self); errable=false; level=L.bottom} }
 
 %inline type_anno:
 | COLON t=type_at_lvl  { t }
-| COLON ERRTYPE LPAREN t=type_at_lvl RPAREN { T.Type{base=T.base t; errable=true; level=T.level t} }
 
 
 channel:

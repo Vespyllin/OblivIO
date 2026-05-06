@@ -1,10 +1,10 @@
 module H = Hashtbl
+module RustOram = ORAM.Rust_oram
 
 type hash_fn = { a: int; b: int }
 
-
 type perfect_hash_state =
-  { oram        : Path_oram.state
+  { oram        : RustOram.oram_state
   ; h1          : hash_fn
   ; h2s         : hash_fn array
   ; n_buckets   : int
@@ -26,3 +26,7 @@ type value =
 val to_string: value -> string
 
 val size: value -> int
+
+val set_error: value -> int -> value
+val get_error: value -> int
+
