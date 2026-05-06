@@ -1,9 +1,9 @@
 TEST
 local channel STR: string@{h};
-local channel INT: err(int@{h});
+local channel INT: err(int)@{h};
 
 var a: int@{h}[]@{h} = [1; 2];
-var b: err(int@{h}) = 0;
+var b: err(int)@{h} = 0;
 
 START@{} (ignored: int@{}) {
     output(STR, "Original values:");
