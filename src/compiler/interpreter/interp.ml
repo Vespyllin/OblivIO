@@ -331,7 +331,7 @@ let rec deep_copy = function
 
 type update = ASSIGN | BIND
 
-let safe_read_index unwrap_indices data idx idx_tl length error =
+ let safe_read_index unwrap_indices data idx idx_tl length error =
   let len = Array.length data in
   let out_of_bounds = Bool.to_int (idx >= length) lor Bool.to_int (idx < 0) in
 
@@ -348,6 +348,7 @@ let safe_read_index unwrap_indices data idx idx_tl length error =
   let new_err = out_of_bounds lor error lor !elem_err in
   set_error !safe_value new_err
 
+(*
 let safe_write_index f data idx tl mode =
   let len = Array.length data in
   if len = 0 then raise @@ InterpFatal "safe_write_index: array of size 0";
@@ -355,7 +356,8 @@ let safe_write_index f data idx tl mode =
     let right_index = Bool.to_int (i lxor idx = 0) in
     (* recurse into tl for every element, gating mode by whether this is the target *)
     f tl data.(i) (right_index land mode)
-  done
+  done *)
+
 
 let rec readvar ctxt =
   let rec _V access_path (A.Var{var_base;loc;ty;_}) = match var_base with
@@ -370,15 +372,15 @@ let rec readvar ctxt =
         | (idx,idx_lvl,arr_lvl)::idx_tl, ArrayVal{length;data;error} ->
           if (L.flows_to idx_lvl L.bottom && L.flows_to arr_lvl L.bottom) || ctxt.unsafe
           then
-            if idx > length - 1 || idx < 0 then
-              raise @@ InterpFatal "ReadVar: indexing array out of bounds"
-            else
-              unwrap_indices idx_tl data.(idx)
+            let out_of_bounds = Bool.to_int (idx >= length) lor Bool.to_int (idx < 0) in
+            let safe_idx = ((1 lxor out_of_bounds) * idx) lor (out_of_bounds * 0) in
+            let result = unwrap_indices idx_tl data.(safe_idx) in
+            set_error result (V.get_error result lor out_of_bounds lor error)
           else
             safe_read_index unwrap_indices data idx idx_tl length error
-        | _ -> raise @@ InterpFatal "readVar"
+        | _ -> raise @@ InterpFatal "readVar - Unhandled unwrap case"
       in
-      deep_copy (unwrap_indices access_path v)
+      unwrap_indices access_path v
     | A.SubscriptVar {var;exp} ->
       let A.Exp{ty=index_ty;_} = exp in
       let i = _int @@ eval ctxt exp in
@@ -400,7 +402,7 @@ let rec readvar ctxt =
         ORAMMap.lookup map correct_key value_type
       | PMapVal{data=map;_} ->
         let key_int = _int key in
-        H.find map key_int
+        H.find map key_int 
       | _ -> raise @@ InterpFatal "MapVar: not a map"
       end
     | A.HeapVar {var} ->
@@ -414,12 +416,14 @@ let rec readvar ctxt =
         deep_copy (Heap.read ctxt.heap addr)
       end else begin
         if (H.find_opt ctxt.oram size = None) then raise @@ InterpFatal "readVar: ORAM - reading from uninitialized oram";
+
         let correct_addr = (((error lxor 1) * addr) lor (error * -1)) in
         let base = Ty.base ty in
         let oram, _addr = H.find ctxt.oram size in
         S.from_bytes base (RustOram.read oram correct_addr)
       end
-  in _V []
+in _V []
+
 and writevar ctxt updkind upd mode =
   let rec _V path (A.Var{var_base;_}) = match var_base with
     | A.SimpleVar x ->
@@ -435,35 +439,53 @@ and writevar ctxt updkind upd mode =
           | _ -> if mode = 1 then 
             H.add ctxt.store x upd
           end
-        | [(idx,lvl)], ArrayVal{length;data;_} ->
-          if L.flows_to lvl L.bottom || ctxt.unsafe then
+        | [(idx,idx_lvl,arr_lvl)], ArrayVal{length;data; _} ->
+          if (L.flows_to idx_lvl L.bottom && L.flows_to arr_lvl L.bottom) || ctxt.unsafe then
             if idx > length - 1 || idx < 0 then
-              raise @@ InterpFatal "ReadVar: indexing array out of bounds"
+              raise @@ InterpFatal "WriteVar: indexing array out of bounds"
             else
-              begin match updkind, ctxt.unsafe with
-              | BIND, false -> data.(idx) <- safeSelect mode data.(idx) upd
-              | _ -> if mode = 1 then data.(idx) <- upd
-              end
+              match updkind, ctxt.unsafe with
+              | BIND, false ->
+                data.(idx) <- safeSelect mode data.(idx) upd
+              | _ ->
+                if mode = 1 then data.(idx) <- upd;
           else
-            safe_write_index f data idx [] mode
-        | (i,lvl)::tl, ArrayVal{length;data;_} ->
+            let len = Array.length data in
+            for i = 0 to len-1 do
+              let right_index = Bool.to_int (i lxor idx = 0) in
+              data.(i) <- safeSelect (right_index land mode) data.(i) upd
+            done
+        | (i,idx_lvl,arr_lvl)::tl, ArrayVal{length;data; _} ->
           let maxidx = length - 1 in
           let cnd1 = Bool.to_int(i >= 0) in
           let cnd2 = Bool.to_int(i > maxidx) in
-          let idx  = cnd1 * i in
-          let idx  = ((cnd2 lxor 1) * idx) lor (cnd2 * maxidx) in
-          if L.flows_to lvl L.bottom || ctxt.unsafe
+          let idx = cnd1 * i in
+          let idx = ((cnd2 lxor 1) * idx) lor (cnd2 * maxidx) in
+          if (L.flows_to idx_lvl L.bottom && L.flows_to arr_lvl L.bottom) || ctxt.unsafe
           then f tl data.(idx) mode
-          else
-            safe_write_index f data idx tl mode
+          else 
+            let len = Array.length data - 1 in
+            begin match tl with
+            | [] ->
+              for i = 0 to len do
+                let right_index = Bool.to_int (i lxor idx = 0) in
+                data.(i) <- safeSelect (right_index land mode) data.(i) upd
+              done
+            | _ ->
+              for i = 0 to len do
+                let right_index = Bool.to_int (i lxor idx = 0) in
+                f tl data.(i) (right_index land mode)
+              done
+            end
         | _ -> raise @@ InterpFatal "writeVar"
-      in
+        in
       f path v mode
     | A.SubscriptVar {var;exp} ->
-      let A.Exp{ty;_} = exp in
+      let A.Exp{ty=index_ty;_} = exp in
       let idx = _int @@ eval ctxt exp in
-      let lvl = Ty.level ty in
-      _V ((idx,lvl)::path) var
+      let index_lvl = Ty.level index_ty in
+      let arr_lvl = Ty.level (let A.Var{ty;_} = var in ty) in
+      _V ((idx, index_lvl, arr_lvl)::path) var
     | A.MapVar {var;exp} ->
       let map_val = readvar ctxt var in
       let key = eval ctxt exp in
@@ -471,35 +493,36 @@ and writevar ctxt updkind upd mode =
       | OMapVal{error; data=map} ->
         let key_int = _int key in
         let correct_key = (((error lxor 1) * key_int) lor (error * 0)) in
+        
         begin match updkind, ctxt.unsafe with
         | BIND, false ->
-          let old_val = ORAMMap.lookup map correct_key
-            (match Ty.base (let A.Var{ty;_} = var in ty) with
-             | Ty.OMAP (_, vt) -> vt
-             | _ -> raise @@ InterpFatal "MapVar write: not an omap") in
-          ORAMMap.update map correct_key (safeSelect mode old_val upd)
+          raise @@ InterpFatal "MapVar: bind not impl"
+          (* let old_val = match ORAMMap.lookup map correct_key with
+            | Some v -> v
+            | None -> set_error (IntVal{error=0; value=0}) 1 in
+          ORAMMap.update map correct_key (safeSelect mode old_val upd) *)
         | _ ->
           if mode = 1 then ORAMMap.update map correct_key upd
         end
-      | PMapVal{data=map;_} ->
-        let key_int = _int key in
-        let correct_key = key_int in
-        begin match updkind, ctxt.unsafe with
-        | BIND, false ->
-          let old_val = match H.find_opt map correct_key with
-            | Some v -> v
-            | None -> set_error (IntVal{error=0; value=0}) 1 in
-          H.replace map correct_key (safeSelect mode old_val upd)
-        | _ ->
-          if mode = 1 then H.replace map correct_key upd
+        | PMapVal{data=map;_} ->
+          let key_int = _int key in
+          let old_val = H.find map key_int in
+
+          begin match updkind, ctxt.unsafe with
+          | BIND, false ->
+            H.replace map key_int (safeSelect mode old_val upd)
+          | _ ->
+            if mode = 1 then H.replace map key_int upd
+          end
+        | _ -> raise @@ InterpFatal "MapVar: not a map"
         end
-      | _ -> raise @@ InterpFatal "MapVar: not a map"
-      end
+
     | A.HeapVar {var} ->
       let error, addr, size, oram = match readvar ctxt var with
         | PointerVal{error; addr} -> error, addr, 0, false
-        | PathVal{error; size; addr} -> error, addr, size, true
+        | PathVal{error; size;  addr} -> error, addr, size, true
         | _ -> raise @@ InterpFatal "HeapVar: not a pointer" in
+
       if not oram then begin
         if (error = 1 || addr = 0) then raise @@ InterpFatal "writeVar: Heap - writing to err/nil";
         match updkind, ctxt.unsafe with
@@ -510,9 +533,12 @@ and writevar ctxt updkind upd mode =
           if mode = 1 then Heap.write ctxt.heap addr upd
       end else begin
         let correct_addr = (((error lxor 1) * addr) lor (error * -1)) in
+        
         if (S.get_byte_size upd > size) then
-          raise @@ InterpFatal ("HeapWrite: Value too large. Attempted to write element of size " ^ string_of_int(S.get_byte_size upd) ^ " into block of size " ^ string_of_int(size));
+          raise @@ InterpFatal ("HeapWrite: Value too large. Attempted to write element of size " ^ string_of_int(S.get_byte_size upd) ^ " into block of size " ^ string_of_int(0));
+
         if (H.find_opt ctxt.oram size = None) then raise @@ InterpFatal "writevar - writing to uninitialized heap";
+
         match updkind, ctxt.unsafe with
         | BIND, false ->
           let A.Var{ty;_} = var in
@@ -520,14 +546,16 @@ and writevar ctxt updkind upd mode =
             | Ty.PATH (t, _) -> Ty.base t
             | Ty.POINTER t -> Ty.base t
             | _ -> raise @@ InterpFatal "HeapWrite: not a pointer type" in
-          let oram, _next_addr = H.find ctxt.oram size in
+          
+          let oram, _next_addr = (H.find ctxt.oram size) in
           let old_val = S.from_bytes inner_ty (RustOram.read oram correct_addr) in
           RustOram.write oram correct_addr (S.to_bytes (safeSelect mode old_val upd))
         | _ ->
-          let oram, _next_addr = H.find ctxt.oram size in
+          let oram, _next_addr = (H.find ctxt.oram size) in
           if mode = 1 then RustOram.write oram correct_addr (S.to_bytes upd)
       end
-  in _V []
+in _V []
+
 and eval ctxt =
   let rec _E (A.Exp{exp_base;_}) =
     match exp_base with

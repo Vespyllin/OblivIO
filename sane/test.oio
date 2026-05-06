@@ -2,26 +2,16 @@ TEST
 local channel STR: err(string)@{h};
 local channel INT: err(int)@{h};
 
-var arr: string@{h}[]@{h}[]@{h} = [["A"]; ["BC"]; ["D"]];
+var arr: string@{h}[]@{h}[]@{h} = [["A"]; ["BC"; "ABC"]; ["D"]];
+var med: err(string@{h}[])@{h} = [];
 var res: err(string)@{h} = "default";
 
 START@{} (ignored: int@{}) {
     output(STR, res);
     output(INT, size(res));
 
+    arr[1][2] = "1000";
     res = arr[1][1];
-    output(STR, res);
-    output(INT, size(res));
-
-    res = arr[1][0];
-    output(STR, res);
-    output(INT, size(res));
-
-    arr[1] = ["AAAAAAAAA"];
-    output(STR, "UNTOUCHED");
-    output(STR, res);
-    output(INT, size(res));
-    res = arr[0][0];
     output(STR, res);
     output(INT, size(res));
 
