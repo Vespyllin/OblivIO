@@ -12,9 +12,9 @@ module S    = Serialize
 
 exception PerfectHashFatal of string
 
-(* let large_prime = 1000003 *)
-let large_prime = 31
-let max_tries   = 1
+let large_prime = 1000003
+
+let max_tries   = 64
 
 let make_hash () =
   { a = 1 + Random.int (large_prime - 1)
@@ -73,7 +73,7 @@ let find_h2 keys m =
     solved := (Bool.to_int !solved lor should_update) = 1
   done;
 
-  if(not !solved) then raise @@ PerfectHashFatal "Failed to hash\n";
+  (* if(not !solved) then raise @@ PerfectHashFatal "Failed to hash\n"; *)
 
   (!best, !solved)
 

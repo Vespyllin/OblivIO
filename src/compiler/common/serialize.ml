@@ -76,8 +76,6 @@ let rec from_bytes (target_type: Ty.basetype) (b: bytes) : value =
     let error = error lor (Bool.to_int (tag <> 1)) in
     IntVal {error; value}
   | Ty.PATH (_, s) ->
-    (* let acq_size = Bytes.get_uint8 b 2 in *)
-    (* if (acq_size != size) then raise @@ InterpFatal ("pointer sizes got mixed up. reading ptr of block size " ^ string_of_int acq_size ^ " when trying to deref ptr of block size" ^ string_of_int s); *)
     let size = s in
     let addr = Int64.to_int (Bytes.get_int64_be b 3) in
     let error = error lor (Bool.to_int (tag <> 3)) in
@@ -90,17 +88,15 @@ let rec from_bytes (target_type: Ty.basetype) (b: bytes) : value =
     StringVal {error; length; data}
   | Ty.ARRAY inner_ty ->
     let length = Bytes.get_uint8 b 2 in
-    let num_elems = length in
-    let data = Array.init num_elems (fun i -> from_bytes (Ty.base inner_ty) (Bytes.sub b (3 + i * 11) 11)) in
+    let available_elems = (Bytes.length b - 3) / 11 in
+    let data = Array.init available_elems (fun i -> from_bytes (Ty.base inner_ty) (Bytes.sub b (3 + i * 11) 11)) in
     let error = error lor (Bool.to_int (tag <> 5)) in
     ArrayVal {error; length; data}
   | Ty.PAIR (v1, v2) ->
-
     let error = error lor (Bool.to_int (tag <> 6)) in
     let v1d = from_bytes (Ty.base v1) (Bytes.sub b 3 (Bytes.length b - 3)) in
     let v1_size = get_byte_size v1d in
     let v2d = from_bytes (Ty.base v2) (Bytes.sub b (3 + v1_size) (Bytes.length b - (3 + v1_size))) in
-
     PairVal {error; data=(v1d,v2d)}
   | Ty.SELF t -> 
     begin match !t with
