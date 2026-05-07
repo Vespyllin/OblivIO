@@ -2,8 +2,18 @@ open Value
 
 module Ty = Types
 
-
 exception SerializeFatal of string
+
+let rec get_byte_size (v: value) : int =
+  let fixed_size = 3+8 in
+  match v with
+  | IntVal _ -> fixed_size
+  | PointerVal _ -> fixed_size
+  | PathVal _ -> fixed_size
+  | PairVal {data=(a,b);_} -> 3 + get_byte_size a + get_byte_size b
+  | StringVal {data; _} -> 3 + Array.length data
+  | ArrayVal {data; _} -> 3 + Array.length data * fixed_size
+  | _ -> raise @@ SerializeFatal "get_byte_size not impl"
 
 let rec to_bytes (v: value) : bytes =
   let fixed_size = 11 in
@@ -48,7 +58,7 @@ let rec to_bytes (v: value) : bytes =
   | PairVal {error; data=(v1, v2)} ->
     let v1d = to_bytes v1 in
     let v2d = to_bytes v2 in
-    let total = 3 + (2 * fixed_size) in
+    let total = 3 + Bytes.length v1d + Bytes.length v2d in
     let b = Bytes.make total '\x00' in
     Bytes.set_uint8 b 0 6;
     Bytes.set_uint8 b 1 error;
@@ -85,9 +95,12 @@ let rec from_bytes (target_type: Ty.basetype) (b: bytes) : value =
     let error = error lor (Bool.to_int (tag <> 5)) in
     ArrayVal {error; length; data}
   | Ty.PAIR (v1, v2) ->
+
     let error = error lor (Bool.to_int (tag <> 6)) in
-    let v1d =  from_bytes (Ty.base v1) (Bytes.sub b 3 11) in
-    let v2d =  from_bytes (Ty.base v2) (Bytes.sub b (3 + 11) 11) in
+    let v1d = from_bytes (Ty.base v1) (Bytes.sub b 3 (Bytes.length b - 3)) in
+    let v1_size = get_byte_size v1d in
+    let v2d = from_bytes (Ty.base v2) (Bytes.sub b (3 + v1_size) (Bytes.length b - (3 + v1_size))) in
+
     PairVal {error; data=(v1d,v2d)}
   | Ty.SELF t -> 
     begin match !t with
@@ -95,14 +108,3 @@ let rec from_bytes (target_type: Ty.basetype) (b: bytes) : value =
     | None -> raise @@ SerializeFatal "uninitialized recursive type";
     end
   | _ -> raise @@ SerializeFatal ("from_bytes: unsupported target type " ^ (Ty.base_to_string target_type))
-
-let get_byte_size (v: value) : int =
-  let fixed_size = 11 in
-  match v with
-  | IntVal _ -> fixed_size
-  | PointerVal _ -> fixed_size
-  | PathVal _ -> fixed_size
-  | PairVal _ -> 3 + 2 * fixed_size
-  | StringVal {data; _} -> 3 + Array.length data
-  | ArrayVal {data; _} -> 3 + Array.length data * fixed_size
-  | _ -> raise @@ SerializeFatal "get_byte_size not impl"

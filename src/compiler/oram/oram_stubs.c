@@ -7,13 +7,14 @@
 
 /* Forward declarations matching Rust #[no_mangle] functions */
 typedef struct OramWrapper OramWrapper;
-OramWrapper* oram_create(uint64_t capacity, uint64_t block_size);
-void         oram_read(OramWrapper* ptr, uint64_t addr, uint8_t* out);
-void         oram_write(OramWrapper* ptr, uint64_t addr, const uint8_t* data, size_t len);
-void         oram_free(OramWrapper* ptr);
-uint8_t*     oram_to_bytes(OramWrapper* ptr, size_t* out_len);
-OramWrapper* oram_from_bytes(const uint8_t* data, size_t len);
-void         oram_free_bytes(uint8_t* ptr, size_t len);
+OramWrapper*    oram_create(uint64_t capacity, uint64_t block_size);
+void            oram_read(OramWrapper* ptr, uint64_t addr, uint8_t* out);
+void            oram_write(OramWrapper* ptr, uint64_t addr, const uint8_t* data, size_t len);
+void            oram_free(OramWrapper* ptr);
+uint8_t*        oram_to_bytes(OramWrapper* ptr, size_t* out_len);
+OramWrapper*    oram_from_bytes(const uint8_t* data, size_t len);
+void            oram_free_bytes(uint8_t* ptr, size_t len);
+uint64_t        oram_block_size(OramWrapper* ptr);
 
 
 /* GC finalizer — called when OCaml collects the value */
@@ -46,7 +47,8 @@ CAMLprim value caml_oram_read(value state, value addr) {
     CAMLparam2(state, addr);
     CAMLlocal1(result);
     OramWrapper* ptr = *((OramWrapper**)Data_custom_val(state));
-    result = caml_alloc_string(64);
+    uint64_t bsize = oram_block_size(ptr);
+    result = caml_alloc_string(bsize);
     oram_read(ptr, (uint64_t)Int_val(addr), (uint8_t*)Bytes_val(result));
     CAMLreturn(result);
 }

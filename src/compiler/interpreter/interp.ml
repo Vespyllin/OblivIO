@@ -39,6 +39,8 @@ type context =
   ; trace: Tr.trace
   }
 
+let dummy_pointer = 0
+
 let enqueue (msg: 'a) (q: 'a sync_queue) =
   Mutex.lock q.lock;
   Queue.add msg q.queue;
@@ -417,7 +419,7 @@ let rec readvar ctxt =
       end else begin
         if (H.find_opt ctxt.oram size = None) then raise @@ InterpFatal "readVar: ORAM - reading from uninitialized oram";
 
-        let correct_addr = (((error lxor 1) * addr) lor (error * -1)) in
+        let correct_addr = (((error lxor 1) * addr) lor (error * dummy_pointer)) in
         let base = Ty.base ty in
         let oram, _addr = H.find ctxt.oram size in
         S.from_bytes base (RustOram.read oram correct_addr)
@@ -532,7 +534,7 @@ and writevar ctxt updkind upd mode =
         | _ ->
           if mode = 1 then Heap.write ctxt.heap addr upd
       end else begin
-        let correct_addr = (((error lxor 1) * addr) lor (error * -1)) in
+        let correct_addr = ((error lxor 1) * addr) lor (error * dummy_pointer) in
         
         if (S.get_byte_size upd > size) then
           raise @@ InterpFatal ("HeapWrite: Value too large. Attempted to write element of size " ^ string_of_int(S.get_byte_size upd) ^ " into block of size " ^ string_of_int(0));
@@ -547,11 +549,11 @@ and writevar ctxt updkind upd mode =
             | Ty.POINTER t -> Ty.base t
             | _ -> raise @@ InterpFatal "HeapWrite: not a pointer type" in
           
-          let oram, _next_addr = (H.find ctxt.oram size) in
+          let oram, _ = (H.find ctxt.oram size) in
           let old_val = S.from_bytes inner_ty (RustOram.read oram correct_addr) in
           RustOram.write oram correct_addr (S.to_bytes (safeSelect mode old_val upd))
         | _ ->
-          let oram, _next_addr = (H.find ctxt.oram size) in
+          let oram, _ = (H.find ctxt.oram size) in
           if mode = 1 then RustOram.write oram correct_addr (S.to_bytes upd)
       end
 in _V []
@@ -593,7 +595,8 @@ and eval ctxt =
       let v = _E arr in
       begin match v with
       | ArrayVal _ ->
-        OMapVal {error=0; data=ORAMMap.build v}
+        let state = ORAMMap.build v in
+        OMapVal {error=0; data=state}
       | _ -> raise @@ InterpFatal "OMapExp: expected array of pairs"
       end
     | A.PMapExp arr -> 
@@ -609,10 +612,10 @@ and eval ctxt =
           end
         done;
         PMapVal{error; data=x}
-  | _ -> raise @@ InterpFatal "PMapExp: expected array of pairs"
-  end
+      | _ -> raise @@ InterpFatal "PMapExp: expected array of pairs"
+      end
     | A.NilExp -> 
-      PointerVal{error=0;addr=0}
+      PointerVal{error=0;addr=dummy_pointer}
     | A.AllocExp e ->
       let v = _E e in
       let addr = Heap.alloc ctxt.heap v in
@@ -621,11 +624,11 @@ and eval ctxt =
       (match H.find_opt ctxt.oram size with
       | None -> 
         let oram = RustOram.create 16 size in
-        H.add ctxt.oram size (oram, 0);
+        H.add ctxt.oram size (oram, dummy_pointer+1);
         ()
       | _ -> ());
 
-      PathVal{error=0; size; addr=(-1)}
+      PathVal{error=0; size; addr=dummy_pointer}
     | A.OramExp{value=e; size=ptr_size} ->
       if (ptr_size <= 0) then raise @@ InterpFatal ("ORAM: Size cannot be equal to or below 0 bytes. Size provided: " ^ string_of_int ptr_size);
 
@@ -638,8 +641,8 @@ and eval ctxt =
         match H.find_opt ctxt.oram ptr_size with
         | None -> 
           let oram = RustOram.create 16 ptr_size in
-          H.add ctxt.oram ptr_size (oram, 0);
-          (oram, 0)
+          H.add ctxt.oram ptr_size (oram, dummy_pointer+1);
+          (oram, dummy_pointer+1)
         | Some (oram, next_addr) -> (oram, next_addr)
       in
       

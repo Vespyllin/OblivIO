@@ -12,8 +12,9 @@ module S    = Serialize
 
 exception PerfectHashFatal of string
 
-let large_prime = 1000003
-let max_tries   = 64
+(* let large_prime = 1000003 *)
+let large_prime = 31
+let max_tries   = 1
 
 let make_hash () =
   { a = 1 + Random.int (large_prime - 1)
@@ -34,47 +35,47 @@ let encode_slot ~block_size key value : bytes =
   b
 
 let decode_slot vt (b: bytes) : (int * value) option =
-  if Bytes.get_uint8 b 0 = 0 then None
-  else
-    match S.from_bytes (pair_ty vt) b with
+  match S.from_bytes (pair_ty vt) b with
     | PairVal{data=(IntVal{value=key;_}, v); _} -> Some (key, v)
-    | _ -> None
+    | _ -> raise @@ PerfectHashFatal "could not retrieve, got back non-pair value"
 
 let dummy_block block_size = Bytes.make block_size '\x00'
 
-let safeSelect bit a b = if bit = 1 then b else a
-
-let oblivious_array_access arr key n =
-  let result = ref arr.(0) in
+let oblivious_h2s_access arr key n =
+  let result = ref { a = 0; b = 0 } in
   for i = 0 to n - 1 do
     let is_target = Bool.to_int (i = key) in
-    result := safeSelect is_target !result arr.(i)
+    result := { a = ((1 lxor is_target) * !result.a) lor (is_target * arr.(i).a)
+              ; b = ((1 lxor is_target) * !result.b) lor (is_target * arr.(i).b) }
   done;
   !result
 
 let find_h2 keys m =
   let best   = ref (make_hash ()) in
   let solved = ref false in
-  for _ = 1 to max_tries do
+
+  for _ = 0 to max_tries do
     let h    = make_hash () in
     let seen = Array.make m false in
     let ok   = ref true in
+
     for j = 0 to List.length keys - 1 do
-      let k = List.nth keys j in
-      if k <> -1 then begin
-        let slot = apply_hash h m k in
-        if seen.(slot) then ok := false
-        else seen.(slot) <- true
-      end
+      let k, belongs = List.nth keys j in
+      let slot = apply_hash h m k in
+      let collision = Bool.to_int seen.(slot) in
+      ok := Bool.to_int (!ok) land (1 lxor (collision land belongs)) = 1;
+      seen.(slot) <- (Bool.to_int seen.(slot) lor belongs) = 1
     done;
-    if !ok && not !solved then begin
-      best   := h;
-      solved := true
-    end
+
+    let should_update = Bool.to_int !ok land (1 lxor Bool.to_int !solved) in
+    best := { a = ((1 lxor should_update) * !best.a) lor (should_update * h.a); 
+              b = ((1 lxor should_update) * !best.b) lor (should_update * h.b) };
+    solved := (Bool.to_int !solved lor should_update) = 1
   done;
-  if not !solved then
-    raise @@ PerfectHashFatal "could not find collision-free h2 — increase max_tries or bucket_size";
-  !best
+
+  if(not !solved) then raise @@ PerfectHashFatal "Failed to hash\n";
+
+  (!best, !solved)
 
 let build (kvs: value) =
   let _err, _len, kvs_arr = match kvs with
@@ -82,14 +83,26 @@ let build (kvs: value) =
   | _ -> raise @@ PerfectHashFatal "not provided an array of k,v pairs" in
 
   let n         = Array.length kvs_arr in
-  let n_buckets = max 1 n in
   let h1        = make_hash () in
 
   let bucket_size =
     let log2n = max 1 (int_of_float (log (float_of_int n) /. log 2.0)) in
     max 4 (log2n * log2n) in
 
-  let block_size = Array.fold_left (fun acc v -> max acc (S.get_byte_size v)) 0 kvs_arr in
+  let n_buckets = bucket_size in
+
+
+  let round_to_oram_block_size n =
+    if n <= 32 then 32
+    else if n <= 64 then 64
+    else if n <= 128 then 128
+    else if n <= 256 then 256
+    else if n <= 512 then 512
+    else raise @@ PerfectHashFatal ("block size " ^ string_of_int n ^ " exceeds maximum supported size of 512") in
+
+  let block_size = round_to_oram_block_size
+    (Array.fold_left (fun acc v -> max acc (S.get_byte_size v)) 0 kvs_arr)
+  in
 
   let capacity =
     let total = n_buckets * bucket_size in
@@ -98,17 +111,20 @@ let build (kvs: value) =
     !p
   in
 
+
   let h2s = Array.make n_buckets (make_hash ()) in
+  let build_error = ref 0 in
   for i = 0 to n_buckets - 1 do
-    let keys = Array.make n (-1) in
-    for j = 0 to n - 1 do
+    let keys = Array.init n (fun j ->
       let k = match kvs_arr.(j) with
         | PairVal{data=(IntVal{value;_}, _);_} -> value
         | _ -> raise @@ PerfectHashFatal "map elements must be pairs with int keys" in
       let belongs = Bool.to_int (apply_hash h1 n_buckets k = i) in
-      keys.(j) <- (belongs * k) + ((1 lxor belongs) * (-1))
-    done;
-    h2s.(i) <- find_h2 (Array.to_list keys) bucket_size
+      (k, belongs)
+    ) in
+    let h2, solved = find_h2 (Array.to_list keys) bucket_size in
+    h2s.(i) <- h2;
+    build_error := !build_error lor (1 lxor Bool.to_int solved)
   done;
 
   (* Create Rust RustOram — capacity and block_size as separate args *)
@@ -125,7 +141,7 @@ let build (kvs: value) =
       | PairVal{data=(IntVal{value=k;_}, _);_} as p -> k, p
       | _ -> raise @@ PerfectHashFatal "map elements must be pairs with int keys" in
     let target_i = apply_hash h1 n_buckets k in
-    let h2       = oblivious_array_access h2s target_i n_buckets in
+    let h2       = oblivious_h2s_access h2s target_i n_buckets in
     let slot     = apply_hash h2 bucket_size k in
     let addr     = target_i * bucket_size + slot in
     let b        = Bytes.make block_size '\x00' in
@@ -134,24 +150,24 @@ let build (kvs: value) =
     RustOram.write oram addr b
   done;
 
-  { oram; h1; h2s; n_buckets; bucket_size; block_size }
+  { oram; h1; h2s; n_buckets; bucket_size; block_size; error= !build_error }
 
 let lookup t key value_type =
   let i    = apply_hash t.h1 t.n_buckets key in
-  let h2   = oblivious_array_access t.h2s i t.n_buckets in
+  let h2   = oblivious_h2s_access t.h2s i t.n_buckets in
   let slot = apply_hash h2 t.bucket_size key in
   let addr = i * t.bucket_size + slot in
-  let b    = RustOram.read t.oram addr in
+  let b = RustOram.read t.oram addr in
+
   match S.from_bytes (pair_ty value_type) b with
   | PairVal{data=(IntVal{value=k;_}, v); _} ->
-    if (k != key) then set_error v 1
-    else v
+    set_error v (get_error v lor Bool.to_int (k != key) lor t.error)
   | _ ->
-    raise @@ PerfectHashFatal "could not retrieve"
+    raise @@ PerfectHashFatal "could not retrieve, got back non-pair value"
 
 let update t key value =
   let i    = apply_hash t.h1 t.n_buckets key in
-  let h2   = oblivious_array_access t.h2s i t.n_buckets in
+  let h2   = oblivious_h2s_access t.h2s i t.n_buckets in
   let slot = apply_hash h2 t.bucket_size key in
   let addr = i * t.bucket_size + slot in
   RustOram.write t.oram addr (encode_slot ~block_size:t.block_size key value)

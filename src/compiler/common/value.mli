@@ -10,6 +10,7 @@ type perfect_hash_state =
   ; n_buckets   : int
   ; bucket_size : int
   ; block_size  : int
+  ; error  : int
   }
 
 

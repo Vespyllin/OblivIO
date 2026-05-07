@@ -3,7 +3,7 @@ module RustOram = ORAM.Rust_oram
 let () =
   Printf.printf "=== Rust ORAM FFI tests ===\n%!";
 
-  let oram = RustOram.create 20 32 in
+  let oram = RustOram.create 21 32 in
   Printf.printf "PASS: create\n%!";
 
   let data = Bytes.make 64 '\x00' in

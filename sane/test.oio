@@ -1,19 +1,28 @@
 TEST
+
 local channel STR: err(string)@{h};
 local channel INT: err(int)@{h};
 
-var arr: string@{h}[]@{h}[]@{h} = [["A"]; ["BC"; "ABC"]; ["D"]];
-var med: err(string@{h}[])@{h} = [];
-var res: err(string)@{h} = "default";
+var m: omap(int, string)@{h} = make_omap([
+  (1,"a"); (2,"b"); (3,"c"); (4,"d"); (5,"e");
+  (6,"f"); (7,"g"); (8,"h"); (9,"i"); (10,"j");
+  (11,"k"); (12,"l"); (13,"m"); (14,"n"); (15,"o");
+  (16,"p"); (17,"q"); (18,"r"); (19,"s"); (20,"t")
+]);
+var r: err(string)@{h} = "";
 
 START@{} (ignored: int@{}) {
-    output(STR, res);
-    output(INT, size(res));
+    r = m[[-1]];
+    output(STR, r);
+    output(INT, size(r));
 
-    arr[1][2] = "1000";
-    res = arr[1][1];
-    output(STR, res);
-    output(INT, size(res));
+    r = m[[2]];
+    output(STR, r);
+    output(INT, size(r));
+
+    r = m[[3]];
+    output(STR, r);
+    output(INT, size(r));
 
     output(STR, "ok");
     exit();
