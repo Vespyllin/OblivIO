@@ -514,7 +514,7 @@ let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
           then Err.error err pos errmsg
           else begin
             checkOramCompatibleTypes ~strict:true a; 
-            checkOramCompatibleTypes ~strict:true b
+            checkOramCompatibleTypes ~strict:false b
           end
       | T.SELF _ -> ()
       | _ -> Err.error err pos "datatype is not supported in ORAM"
