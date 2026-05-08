@@ -1,17 +1,6 @@
-module RustOram = ORAM.Rust_oram
 module H = Hashtbl
 
 type hash_fn = { a: int; b: int }
-
-type perfect_hash_state =
-  { oram        : RustOram.oram_state
-  ; h1          : hash_fn
-  ; h2s         : hash_fn array
-  ; n_buckets   : int
-  ; bucket_size : int
-  ; block_size  : int
-  ; error       : int
-  }
 
 type value =
 | IntVal of {error: int; value:int}
@@ -20,7 +9,6 @@ type value =
 | ArrayVal of {error: int; length: int; data: value array}
 | PointerVal of {error: int; addr: int}
 | PathVal of {error: int; size: int; addr: int}
-| OMapVal of {error: int; data: perfect_hash_state}
 | PMapVal of {error: int; data: (int, value) H.t}
 
 let rec to_string = function
@@ -50,7 +38,6 @@ let rec to_string = function
   | PathVal {error;size;addr} ->
       if error = 1 then "ErrPtr" else
       "path(" ^ string_of_int addr ^ ")[" ^ string_of_int size ^ "]"
-  | OMapVal _ -> "omap"
   | PMapVal _ -> "pmap"
 
 let rec size = function 
@@ -60,8 +47,7 @@ let rec size = function
   | ArrayVal {data;  _}            ->    8 + (8*Array.length data)
   | PointerVal _                                ->    8
   | PathVal _                                   ->    8
-  | OMapVal _                                    ->    -1
-  | PMapVal _                                    ->    -1
+  | PMapVal _                                   ->    -1
 
 
 let set_error (v: value) error : value =
@@ -72,7 +58,6 @@ let set_error (v: value) error : value =
   | StringVal {length; data; _} -> StringVal {error; length; data}
   | ArrayVal {length; data; _} -> ArrayVal {error; length; data}
   | PairVal{data;_} -> PairVal{error; data}
-  | OMapVal {data; _} -> OMapVal {error; data}
   | PMapVal {data; _} -> PMapVal {error; data}
 
 let get_error = function
@@ -82,5 +67,4 @@ let get_error = function
   | StringVal {error; _} -> error
   | ArrayVal {error; _} -> error
   | PairVal{error;_} -> error
-  | OMapVal {error; _} -> error
   | PMapVal {error; _} -> error

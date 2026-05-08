@@ -64,8 +64,6 @@ rule token = parse
 | "ptr"               { PTRTYPE }
 | "path"              { PATHTYPE }
 | "make_pmap"          { PMAP }
-| "make_omap"          { OMAP }
-| "omap"              { OMAPTYPE }
 | "pmap"              { PMAPTYPE }
 | "err"               { ERRTYPE }
 | "input"             { INPUT }

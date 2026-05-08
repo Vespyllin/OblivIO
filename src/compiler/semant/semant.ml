@@ -138,9 +138,6 @@ let rec checkAssignable ?self value dest err pos =
   | T.PATH (t_value, s1), T.PATH (t_dest, s2) ->
     if (s1 != s2) then Err.error err pos @@ "cannot assign paths of different sizes: " ^ string_of_int s1 ^ " to " ^ string_of_int s2;
     checkAssignable ?self t_value t_dest err pos
-  | T.OMAP (t_k, t_v), T.OMAP (d_k, d_v) ->
-    checkAssignable ?self (T.Type{base=t_k;errable=false;level=L.bottom}) (T.Type{base=d_k;errable=false;level=L.bottom}) err pos;
-    checkAssignable ?self (T.Type{base=t_v;errable=false;level=L.bottom}) (T.Type{base=d_v;errable=false;level=L.bottom}) err pos
   | T.PMAP (t_k, t_v), T.PMAP (d_k, d_v) ->
     checkAssignable ?self (T.Type{base=t_k;errable=false;level=L.bottom}) (T.Type{base=d_k;errable=false;level=L.bottom}) err pos;
     checkAssignable ?self (T.Type{base=t_v;errable=false;level=L.bottom}) (T.Type{base=d_v;errable=false;level=L.bottom}) err pos
@@ -247,31 +244,6 @@ let rec transExp ({err;_} as ctxt) =
       let e, ty = e_ty @@ transExp ctxt value in
       let base = T.ARRAY ty in
       ArrayExp (List.init length (fun _ -> e)) ^! T.Type{base;errable=false;level=L.bottom}
-    | OMapExp t ->
-      let ty = match t with
-      | hd::_ ->
-        let _, ty = e_ty @@ transExp ctxt hd in
-        begin match T.base ty with
-        | T.PAIR _ -> ty
-        | _ -> errTy err pos @@ "map elements must be pairs, got: " ^ T.to_string ty
-        end
-      | [] ->
-        T.Type{base=T.PAIR(
-          T.Type{base=Ty.ANY;errable=false;level=L.bottom},
-          T.Type{base=Ty.ANY;errable=false;level=L.bottom}
-        );errable=false;level=L.bottom} in
-      let f exp =
-        let e,ety = e_ty @@ transExp ctxt exp in
-        checkBaseType ty ety err pos;
-        e in
-      let elems = List.map f t in
-      let arr_ty = T.Type{base=T.ARRAY ty;errable=false;level=L.bottom} in
-      let arr_exp = ArrayExp elems ^! arr_ty in
-      let base = match T.base ty with
-        | T.PAIR (kt, vt) -> T.OMAP (T.base kt, T.base vt)
-        | _ -> raise @@ NotImplemented "OMapExp: expected pair type" in
-      OMapExp arr_exp ^! T.Type{base;errable=false;level=L.bottom}
-
     | PMapExp t ->
       let ty = match t with
       | hd::_ ->
@@ -338,12 +310,6 @@ and transVar ({err;_} as ctxt) =
       let var, vty, vlvl, loc = v_ty_lvl_loc @@ trvar var in
       let exp, ety, elvl = e_ty_lvl @@ transExp ctxt exp in
       let cty = match T.base vty with
-        | T.OMAP (kt, vt) ->
-          let fst_ty = T.Type{base=kt;errable=false;level=L.bottom} in
-          let snd_ty = T.Type{base=vt;errable=false;level=L.bottom} in
-          checkAssignable ety fst_ty err pos;
-          let res_type = snd_ty in
-          raiseTo res_type (L.lub vlvl elvl)
         | T.PMAP (kt, vt) ->
           let fst_ty = T.Type{base=kt;errable=false;level=L.bottom} in
           let snd_ty = T.Type{base=vt;errable=false;level=L.bottom} in
@@ -537,14 +503,13 @@ let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
         checkOramCompatibleTypes ty;
       | T.ARRAY content ->
         if not @@ L.flows_to (T.level ty) (T.level content)
-        then Err.error err pos @@ "array content cannot be more privileged than array";
-        checkOramCompatibleTypes ~strict:true content;
-      | T.OMAP (_, _) ->
-        if L.flows_to (T.level ty) L.bottom
-        then Err.error err pos "omap variable cannot be public"
-      | T.PMAP (_, _) ->
-        if not (L.flows_to (T.level ty) L.bottom)
-        then Err.error err pos "pmap variable must be public"
+        then Err.error err pos @@ "array cannot be more privileged than array content";
+        if not @@ L.flows_to (T.level ty) L.bottom
+        then checkOramCompatibleTypes ~strict:true content
+        else checkPtrLevels content;
+      | T.PMAP (_, vt) ->
+        let vty = T.Type{base=vt; errable=false; level=L.bottom} in
+        checkOramCompatibleTypes ~strict:true vty
       | _ -> ()
     in
     checkPtrLevels ty;

@@ -35,7 +35,6 @@ and exp_base
   | PairExp of (exp*exp)
   | ArrayExp of exp list
   | ArrayConstructorExp of {value: exp; length: int}
-  | OMapExp of exp list
   | PMapExp of exp list
   | AllocExp of exp
   | OramExp of {value: exp; size: int}

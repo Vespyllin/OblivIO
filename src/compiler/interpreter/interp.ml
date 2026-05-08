@@ -38,6 +38,7 @@ type context =
 
 let worst_case_index_s = 0.1
 let worst_case_deref_s = 0.1
+let worst_case_map_s = 0.1
 let worst_case_safewrite_s = 1.0
 let dummy_pointer = 0
 
@@ -324,47 +325,70 @@ let op_unsafe oper v1 v2 =
   | CoalesceOp, a, _ -> a
   | _ -> raise @@ NotImplemented (V.to_string v1 ^ to_string oper ^ V.to_string v2)
 
-
 type update = ASSIGN | BIND
 
-let timed_array_access data idx =
+let timed_array_read (data: value array) (length: int) (idx: int) (dummy: value) : value =
   let start = Unix.gettimeofday () in
-  let result = data.(min idx ((Array.length data) -1)) in
+
+  let safe_idx = min (max idx 0) (Array.length data - 1) in
+  let in_bounds = Bool.to_int (idx >= 0) land Bool.to_int (idx < length) in
+  let result = if in_bounds = 1 then data.(safe_idx) else dummy in
+
   let elapsed = Unix.gettimeofday () -. start in
   Unix.sleepf (Float.max 0.0 (worst_case_index_s -. elapsed));
   result
 
+let timed_array_write (data: value array) (idx: int) (upd: value) : unit =
+  let start = Unix.gettimeofday () in
+
+  if (idx < Array.length data && idx > 0) then data.(idx) <- upd;
+
+  let elapsed = Unix.gettimeofday () -. start in
+  Unix.sleepf (Float.max 0.0 (worst_case_index_s -. elapsed))
+
 let timed_deref heap error addr (block_ty: Ty.basetype) size =
   let safe_addr = ((error lxor 1) * addr) lor (error * dummy_pointer) in
   let dummy = S.dummy_of_size block_ty size in
+
   let start = Unix.gettimeofday () in
+
   let heap_result =
     match Heap.read heap safe_addr with
     | v -> v
     | exception Heap.HeapError _ -> dummy
   in
   let result = safeSelect (error lxor 1) dummy heap_result in
+
   let elapsed = Unix.gettimeofday () -. start in
   Unix.sleepf (Float.max 0.0 (worst_case_deref_s -. elapsed));
   result
 
-let timed_path_write heap updkind unsafe mode error addr (block_ty: Ty.basetype) size upd =
-  let safe_addr = ((error lxor 1) * addr) lor (error * dummy_pointer) in
-  let effective_mode = mode land (error lxor 1) in
+let timed_path_write heap error addr size upd =
   let start = Unix.gettimeofday () in
-  begin match updkind, unsafe with
-  | BIND, false ->
-    let old_val =
-      match Heap.read heap safe_addr with
-      | v -> v
-      | exception Heap.HeapError _ -> S.dummy_of_size block_ty size
-    in
-    Heap.write heap safe_addr (safeSelect effective_mode old_val upd)
-  | _ ->
-    if effective_mode = 1 then Heap.write heap safe_addr upd
-  end;
+
+  if (error != 1) then Heap.write heap addr upd;
+
   let elapsed = Unix.gettimeofday () -. start in
+
   Unix.sleepf (Float.max 0.0 (worst_case_safewrite_s *. float_of_int size -. elapsed))
+
+let timed_map_read (map: (int, value) H.t) (key: int) (dummy: value) : value =
+  let start = Unix.gettimeofday () in
+
+  let result = match H.find_opt map key with Some v -> v | None -> dummy in
+
+  let elapsed = Unix.gettimeofday () -. start in
+
+  Unix.sleepf (Float.max 0.0 (worst_case_map_s -. elapsed));
+  result
+
+let timed_map_write (map: (int, value) H.t) (key: int) (upd: value) : unit =
+  let start = Unix.gettimeofday () in
+
+  H.replace map key upd;
+
+  let elapsed = Unix.gettimeofday () -. start in
+  Unix.sleepf (Float.max 0.0 (worst_case_map_s -. elapsed))
 
 let rec readvar ctxt =
   let rec _V access_path (A.Var{var_base;loc;ty;_}) = match var_base with
@@ -373,23 +397,28 @@ let rec readvar ctxt =
         match loc with
         | LOCAL -> lookup ctxt.memory x
         | STORE -> lookup ctxt.store x in
-      let rec unwrap_indices access_elem v =
+      let rec unwrap_indices access_elem v cur_ty =
         match access_elem, v with
         | [], _ -> v
         | (idx,idx_lvl,arr_lvl)::idx_tl, ArrayVal{length;data;error} ->
+          let elem_ty = match Ty.base cur_ty with
+            | Ty.ARRAY content -> content
+            | _ -> raise @@ InterpFatal "readVar: expected array type"
+          in
           let out_of_bounds = Bool.to_int (idx >= length) lor Bool.to_int (idx < 0) in
           if (L.flows_to idx_lvl L.bottom && L.flows_to arr_lvl L.bottom) || ctxt.unsafe
           then
-            if (out_of_bounds = 1) 
-              then raise @@ InterpFatal "readVar - Unhandled unwrap case"
-              else unwrap_indices idx_tl data.(idx)
+            if (out_of_bounds = 1)
+              then raise @@ InterpFatal "readVar: out of bounds public read"
+              else unwrap_indices idx_tl data.(idx) elem_ty
           else begin
-            let result = unwrap_indices idx_tl (timed_array_access data idx) in
-            set_error result (V.get_error result lor out_of_bounds lor error)
+            let dummy = S.dummy_of_size (Ty.base elem_ty) 0 in
+            let result = unwrap_indices idx_tl (timed_array_read data length idx dummy) elem_ty in
+            set_error result (V.get_error result lor error)
           end
         | _ -> raise @@ InterpFatal "readVar - Unhandled unwrap case"
       in
-      unwrap_indices access_path v
+      unwrap_indices access_path v ty
     | A.SubscriptVar {var;exp} ->
       let A.Exp{ty=index_ty;_} = exp in
       let i = _int @@ eval ctxt exp in
@@ -397,16 +426,18 @@ let rec readvar ctxt =
       let arr_lvl = Ty.level ty in
       _V ((i, index_lvl, arr_lvl)::access_path) var
     | A.MapVar {var;exp} ->
+      let A.Exp{ty=key_ty;_} = exp in
+      let key_lvl = Ty.level key_ty in
+      let map_lvl = Ty.level (let A.Var{ty;_} = var in ty) in
       let map_val = _V [] var in
       let key = eval ctxt exp in
       begin match map_val with
-      (* | OMapVal{error; data=map} ->
-        let key_int = _int key in
-        let correct_key = (((error lxor 1) * key_int) lor (error * 0)) in
-        ORAMMap.lookup map correct_key ... *)
       | PMapVal{data=map;_} ->
         let key_int = _int key in
-        H.find map key_int
+        if (L.flows_to key_lvl L.bottom && L.flows_to map_lvl L.bottom) || ctxt.unsafe then
+          H.find map key_int
+        else
+          timed_map_read map key_int (S.dummy_of_size (Ty.base ty) 0)
       | _ -> raise @@ InterpFatal "MapVar: not a map"
       end
     | A.HeapVar {var} ->
@@ -425,80 +456,95 @@ and writevar ctxt updkind upd mode =
   let rec _V path (A.Var{var_base;ty;_}) = match var_base with
     | A.SimpleVar x ->
       let v = lookup ctxt.store x in
-      let rec f path v mode =
+      let rec f path v mode cur_ty =
         match path, v with
         | [], _ ->
-          begin 
+          begin
           match updkind, ctxt.unsafe with
           | BIND, false ->
             let orig = lookup ctxt.store x in
             H.add ctxt.store x @@ safeSelect mode orig upd
-          | _ -> if mode = 1 then 
+          | _ -> if mode = 1 then
             H.add ctxt.store x upd
           end
         | [(idx,idx_lvl,arr_lvl)], ArrayVal{length;data; _} ->
+          let elem_ty = match Ty.base cur_ty with
+            | Ty.ARRAY content -> content
+            | _ -> raise @@ InterpFatal "writeVar: expected array type"
+          in
           if (L.flows_to idx_lvl L.bottom && L.flows_to arr_lvl L.bottom) || ctxt.unsafe then
             if idx > length - 1 || idx < 0 then
               raise @@ InterpFatal "WriteVar: indexing array out of bounds"
             else
               match updkind, ctxt.unsafe with
-              | BIND, false ->
-                data.(idx) <- safeSelect mode data.(idx) upd
-              | _ ->
-                if mode = 1 then data.(idx) <- upd;
-          else
-            let len = Array.length data in
-            for i = 0 to len-1 do
-              let right_index = Bool.to_int (i lxor idx = 0) in
-              data.(i) <- safeSelect (right_index land mode) data.(i) upd
-            done
+              | BIND, false -> raise @@ InterpFatal "WriteVar: Array public bind?"
+              | _ -> if mode = 1 then data.(idx) <- upd;
+          else begin
+            match updkind, ctxt.unsafe with
+            | BIND, false ->
+              let dummy = S.dummy_of_size (Ty.base elem_ty) 0 in
+              let old_val = timed_array_read data length idx dummy in
+              timed_array_write data idx (safeSelect mode old_val upd)
+            | _ -> if mode = 1 then timed_array_write data idx upd
+          end
         | (i,idx_lvl,arr_lvl)::tl, ArrayVal{length;data; _} ->
+          let elem_ty = match Ty.base cur_ty with
+            | Ty.ARRAY content -> content
+            | _ -> raise @@ InterpFatal "writeVar: expected array type"
+          in
           let maxidx = length - 1 in
           let cnd1 = Bool.to_int(i >= 0) in
           let cnd2 = Bool.to_int(i > maxidx) in
           let idx = cnd1 * i in
           let idx = ((cnd2 lxor 1) * idx) lor (cnd2 * maxidx) in
           if (L.flows_to idx_lvl L.bottom && L.flows_to arr_lvl L.bottom) || ctxt.unsafe
-          then f tl data.(idx) mode
-          else 
-            let len = Array.length data - 1 in
+          then f tl data.(idx) mode elem_ty
+          else
             begin match tl with
             | [] ->
-              for i = 0 to len do
-                let right_index = Bool.to_int (i lxor idx = 0) in
-                data.(i) <- safeSelect (right_index land mode) data.(i) upd
-              done
-            | _ ->
-              for i = 0 to len do
-                let right_index = Bool.to_int (i lxor idx = 0) in
-                f tl data.(i) (right_index land mode)
-              done
+              let dummy = S.dummy_of_size (Ty.base elem_ty) 0 in
+              begin match updkind, ctxt.unsafe with
+              | BIND, false ->
+                let old_val = timed_array_read data length idx dummy in
+                timed_array_write data idx (safeSelect mode old_val upd)
+              | _ -> if mode = 1 then timed_array_write data idx upd
+              end
+            | _ -> raise @@ InterpFatal "writeVar: nested private array (impossible by semant)"
             end
         | _ -> raise @@ InterpFatal "writeVar"
         in
-      f path v mode
+      f path v mode ty
+
     | A.SubscriptVar {var;exp} ->
       let A.Exp{ty=index_ty;_} = exp in
       let idx = _int @@ eval ctxt exp in
       let index_lvl = Ty.level index_ty in
       let arr_lvl = Ty.level (let A.Var{ty;_} = var in ty) in
       _V ((idx, index_lvl, arr_lvl)::path) var
+
     | A.MapVar {var;exp} ->
+      let A.Exp{ty=key_ty;_} = exp in
+      let key_lvl = Ty.level key_ty in
+      let map_lvl = Ty.level (let A.Var{ty;_} = var in ty) in
       let map_val = readvar ctxt var in
       let key = eval ctxt exp in
       begin match map_val with
       | PMapVal{data=map;_} ->
-          let key_int = _int key in
-          let old_val = H.find map key_int in
-
-          begin match updkind, ctxt.unsafe with
+        let key_int = _int key in
+        let dummy = S.dummy_of_size (Ty.base ty) 0 in
+        if (L.flows_to key_lvl L.bottom && L.flows_to map_lvl L.bottom) || ctxt.unsafe then begin
+          match updkind, ctxt.unsafe with
+          | BIND, false -> raise @@ InterpFatal "Write MapVar: public bind?"
+          | _ -> if mode = 1 then H.replace map key_int upd
+        end else begin
+          match updkind, ctxt.unsafe with
           | BIND, false ->
-            H.replace map key_int (safeSelect mode old_val upd)
-          | _ ->
-            if mode = 1 then H.replace map key_int upd
-          end
-        | _ -> raise @@ InterpFatal "MapVar: not a map"
+            let old_val = timed_map_read map key_int dummy in
+            timed_map_write map key_int (safeSelect mode old_val upd)
+          | _ -> if mode = 1 then timed_map_write map key_int upd
         end
+      | _ -> raise @@ InterpFatal "MapVar: not a map"
+      end
 
     | A.HeapVar {var} ->
       begin match readvar ctxt var with
@@ -512,7 +558,16 @@ and writevar ctxt updkind upd mode =
           if mode = 1 then Heap.write ctxt.heap addr upd
         end
       | PathVal{error; addr; size} ->
-        timed_path_write ctxt.heap updkind ctxt.unsafe mode error addr (Ty.base ty) size upd
+        begin match updkind, ctxt.unsafe with
+        | BIND, false ->
+          let safe_addr = ((error lxor 1) * addr) lor (error * dummy_pointer) in
+          let old_val = match Heap.read ctxt.heap safe_addr with
+            | v -> v
+            | exception Heap.HeapError _ -> S.dummy_of_size (Ty.base ty) size
+          in
+          timed_path_write ctxt.heap error addr size (safeSelect mode old_val upd)
+        | _ -> if mode = 1 then timed_path_write ctxt.heap error addr size upd
+        end
       | _ -> raise @@ InterpFatal "HeapVar: not a pointer"
       end
 in _V []
@@ -550,16 +605,7 @@ and eval ctxt =
       let length = List.length arr in
       let data = arr |> List.map (fun e -> _E e) |> Array.of_list in
       ArrayVal {error=0;length;data}
-    | A.OMapExp _ ->
-      (* let v = _E arr in
-      begin match v with
-      | ArrayVal _ ->
-        let state = ORAMMap.build v in
-        OMapVal {error=0; data=state}
-      | _ -> raise @@ InterpFatal "OMapExp: expected array of pairs"
-      end *)
-      raise @@ InterpFatal "OMapExp Not Impl"
-    | A.PMapExp arr -> 
+    | A.PMapExp arr ->
       let v = _E arr in
       begin match v with
       | ArrayVal {error; length; data} ->
@@ -583,10 +629,10 @@ and eval ctxt =
     | A.OnilExp size ->
       PathVal{error=0; size; addr=dummy_pointer}
     | A.OramExp{value=e; size=ptr_size} ->
-      let A.Exp{ty=inner_ty;_} = e in
+      let A.Exp{ty=_inner_ty;_} = e in
       let v = _E e in
       let addr = Heap.reserve ctxt.heap in
-      timed_path_write ctxt.heap ASSIGN ctxt.unsafe 1 0 addr (Ty.base inner_ty) ptr_size v;
+      timed_path_write ctxt.heap 0 addr ptr_size v;
       PathVal{error=0; size=ptr_size; addr}
   in _E
 

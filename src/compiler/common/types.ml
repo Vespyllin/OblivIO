@@ -8,7 +8,6 @@ type basetype =
   | ARRAY of ty
   | POINTER of ty
   | PATH of ty * int
-  | OMAP of basetype * basetype
   | PMAP of basetype * basetype
   | ANY
   | SELF of ty option ref
@@ -39,7 +38,6 @@ let rec base_to_string = function
     to_string t ^ "[]"
   | POINTER t -> String.concat "" ["ptr("; to_string t; ")"]
   | PATH (t, s) -> String.concat "" ["path("; to_string t; ")["; string_of_int s; "]"]
-  | OMAP (k,v) -> String.concat "" ["omap("; base_to_string k; "->";base_to_string v; ")"]
   | PMAP (k,v) -> String.concat "" ["pmap("; base_to_string k; "->";base_to_string v; ")"]
   | ANY -> "any"
   | SELF _ -> "μ" 
