@@ -328,6 +328,7 @@ let op_unsafe oper v1 v2 =
 type update = ASSIGN | BIND
 
 let timed_array_read (data: value array) (length: int) (idx: int) (dummy: value) : value =
+  print_string "timed read\n";
   let start = Unix.gettimeofday () in
 
   let safe_idx = min (max idx 0) (Array.length data - 1) in
@@ -339,6 +340,7 @@ let timed_array_read (data: value array) (length: int) (idx: int) (dummy: value)
   result
 
 let timed_array_write (data: value array) (idx: int) (upd: value) : unit =
+  print_string "timed write\n";
   let start = Unix.gettimeofday () in
 
   if (idx < Array.length data && idx > 0) then data.(idx) <- upd;
@@ -421,9 +423,10 @@ let rec readvar ctxt =
       unwrap_indices access_path v ty
     | A.SubscriptVar {var;exp} ->
       let A.Exp{ty=index_ty;_} = exp in
+      let A.Var{ty=arr_ty;_} = var in
       let i = _int @@ eval ctxt exp in
       let index_lvl = Ty.level index_ty in
-      let arr_lvl = Ty.level ty in
+      let arr_lvl = Ty.level arr_ty in
       _V ((i, index_lvl, arr_lvl)::access_path) var
     | A.MapVar {var;exp} ->
       let A.Exp{ty=key_ty;_} = exp in
