@@ -496,7 +496,7 @@ let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
     checkAssignable ~self:ty initty ty err pos;
 
     let rec checkOramCompatibleTypes ?(strict=false) ty =
-      let errmsg = "cannot pass in a variable size value within an array/pair in a path" in
+      let errmsg = "cannot use a variable size value as an array or path element" in
       match T.base ty with
       | T.INT -> ()
       | T.STRING -> 
@@ -509,13 +509,11 @@ let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
         if strict 
           then Err.error err pos errmsg
           else checkOramCompatibleTypes ~strict:true content
-      | T.PAIR (a, b) -> 
-          if strict 
-          then Err.error err pos errmsg
-          else begin
-            checkOramCompatibleTypes ~strict:true a; 
-            checkOramCompatibleTypes ~strict:false b
-          end
+      | T.PAIR (a, b) ->
+          checkOramCompatibleTypes ~strict:true a;
+          if strict
+          then checkOramCompatibleTypes ~strict:true b
+          else checkOramCompatibleTypes ~strict:false b
       | T.SELF _ -> ()
       | _ -> Err.error err pos "datatype is not supported in ORAM"
     in
@@ -540,6 +538,7 @@ let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
       | T.ARRAY content ->
         if not @@ L.flows_to (T.level ty) (T.level content)
         then Err.error err pos @@ "array content cannot be more privileged than array";
+        checkOramCompatibleTypes ~strict:true content;
       | T.OMAP (_, _) ->
         if L.flows_to (T.level ty) L.bottom
         then Err.error err pos "omap variable cannot be public"

@@ -3,17 +3,32 @@ TEST
 local channel STR: err(string)@{h};
 local channel INT: err(int)@{h};
 
-var m: path(int@{h}[]@{h})[64]@{h} = onil(64);
-var m2: path(int@{h}[]@{h})[64]@{h} = onil(64);
-var r: err(int)@{h} = 0;
+var arr1: string@{h}[]@{h}[]@{h} = [["A"]; ["B"]];
+var arr2: string@{h}[]@{h}[]@{h} = [["C"]; ["Deee"; "T"]; ["E"]];
+
+// b will hold a safeSelected alias to one of the inner arrays
+var b: err(string@{h}[])@{h} = arr1[0];
+
+var secret: int@{h} = 0;
 
 START@{} (ignored: int@{}) {
-  m = oram([1;2;3], 64);
-  m2 = oram([1], 64);
+    // obliviously select: secret=1 picks arr1[0], secret=0 picks arr2[0]
+    oblif secret
+    then b ?= arr1[0];
+    else b ?= arr2[1];
 
-  output(INT, size(*m));
-  output(INT, size(*m2));
-  
-  output(STR, "ok");
-  exit();
+    output(STR, b[0]);       
+    output(STR, b[1]);       
+    output(STR, b[2]);       
+    
+    output(INT, size(b[0]));        
+    output(INT, size(b[1]));        
+    output(INT, size(b[2]));        
+
+    arr1[0][0] = "CHANGED";  
+
+    output(STR, b[0]);        
+
+    output(STR, "ok");
+    exit();
 }

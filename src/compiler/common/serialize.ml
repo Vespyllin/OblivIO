@@ -67,6 +67,26 @@ let rec to_bytes (v: value) : bytes =
     b
   | _ -> raise @@ SerializeFatal "to_bytes: unsupported value type"
 
+let rec dummy_of_size (ty: Ty.basetype) (size: int) : value =
+  match ty with
+  | Ty.INT ->
+    IntVal{error=1; value=0}
+  | Ty.PATH (_, s) ->
+    PathVal{error=1; size=s; addr=0}
+  | Ty.ARRAY inner_ty ->
+    let word = Sys.word_size / 8 in
+    let n = max 0 ((size - 3) / word) in
+    let data = Array.init n (fun _ -> dummy_of_size (Ty.base inner_ty) word) in
+    ArrayVal{error=1; length=0; data}
+  | Ty.PAIR (a_ty, b_ty) ->
+    let word = Sys.word_size / 8 in
+    let a = dummy_of_size (Ty.base a_ty) word in
+    let b = dummy_of_size (Ty.base b_ty) (size - 3 - word) in
+    PairVal{error=1; data=(a, b)}
+  | _ ->
+    let data = Array.make (max 0 (size - 3)) '\x00' in
+    StringVal{error=1; length=0; data}
+
 let rec from_bytes (target_type: Ty.basetype) (b: bytes) : value =
   let tag = Bytes.get_uint8 b 0 in
   let error = Bytes.get_uint8 b 1 in

@@ -9,8 +9,6 @@ module Tr = Common.Trace
 module C = Common.Channel
 module S = Common.Serialize
 module Heap = Common.Heap
-module RustOram = ORAM.Rust_oram
-module ORAMMap = Common.Perfectmap
 
 
 open Common.Value
@@ -32,13 +30,15 @@ type context =
   ; memory: (string, value) H.t
   ; store: (string, value) H.t
   ; heap: Heap.t
-  ; oram: (int, (RustOram.oram_state * int)) H.t
   ; handlers: (string, handler_info) H.t
   ; trust_map: (C.channel, L.level * Ty.ty) H.t
   ; server: server_info
   ; trace: Tr.trace
   }
 
+let worst_case_index_s = 0.1
+let worst_case_deref_s = 0.1
+let worst_case_safewrite_s = 1.0
 let dummy_pointer = 0
 
 let enqueue (msg: 'a) (q: 'a sync_queue) =
@@ -227,10 +227,13 @@ let safeSelect (bit: int) (orig: value) (upd: value) =
         done;
         ArrayVal{error=err; length; data}
       end
+    | PathVal{error=e1; size=s1; addr=v1}, PathVal{error=e2; size=s2; addr=v2} ->
+      let err = ((bit lxor 1) * e1) lor (bit * e2) in
+      let size = ((bit lxor 1) * s1) lor (bit * s2) in
+      let addr = ((bit lxor 1) * v1) lor (bit * v2) in
+      PathVal{error=err; size; addr}
     | _ -> raise @@ InterpFatal ("safeSelect: " ^ (V.to_string orig) ^  ", " ^ (V.to_string upd)) in
   _S orig upd
-
-
 
 let safeConcatArr (arr1: value) (arr2: value) =
   (* TODO Check if sub is oblivious here *)
@@ -244,7 +247,6 @@ let safeConcatArr (arr1: value) (arr2: value) =
     let data = Array.concat [real1; real2; dummy1; dummy2] in
     ArrayVal{error=err; length=l1+l2; data}
   | _ -> raise @@ InterpFatal "safeConcatArr: expected two arrays"
-
 
 let op oper v1 v2 =
   match oper,v1,v2 with
@@ -322,44 +324,47 @@ let op_unsafe oper v1 v2 =
   | CoalesceOp, a, _ -> a
   | _ -> raise @@ NotImplemented (V.to_string v1 ^ to_string oper ^ V.to_string v2)
 
-let rec deep_copy = function
-  | IntVal {error; value} -> IntVal {error; value}
-  | PointerVal {error; addr} -> PointerVal {error; addr}
-  | PathVal {error; size; addr} -> PathVal {error; size; addr}
-  | StringVal {error; length; data} -> StringVal {error; length; data = Array.copy data}
-  | ArrayVal {error; length; data} -> ArrayVal {error; length; data = Array.map deep_copy data}
-  | PairVal{error;data=(a, b)} -> PairVal{error;data=(deep_copy a, deep_copy b)}
-  | _ -> raise @@ InterpFatal "deep_copy: not impl"
 
 type update = ASSIGN | BIND
 
- let safe_read_index unwrap_indices data idx idx_tl length error =
-  let len = Array.length data in
-  let out_of_bounds = Bool.to_int (idx >= length) lor Bool.to_int (idx < 0) in
+let timed_array_access data idx =
+  let start = Unix.gettimeofday () in
+  let result = data.(min idx ((Array.length data) -1)) in
+  let elapsed = Unix.gettimeofday () -. start in
+  Unix.sleepf (Float.max 0.0 (worst_case_index_s -. elapsed));
+  result
 
-  let safe_value = ref (deep_copy (unwrap_indices idx_tl data.(0))) in
-  let elem_err   = ref 0 in
+let timed_deref heap error addr (block_ty: Ty.basetype) size =
+  let safe_addr = ((error lxor 1) * addr) lor (error * dummy_pointer) in
+  let dummy = S.dummy_of_size block_ty size in
+  let start = Unix.gettimeofday () in
+  let heap_result =
+    match Heap.read heap safe_addr with
+    | v -> v
+    | exception Heap.HeapError _ -> dummy
+  in
+  let result = safeSelect (error lxor 1) dummy heap_result in
+  let elapsed = Unix.gettimeofday () -. start in
+  Unix.sleepf (Float.max 0.0 (worst_case_deref_s -. elapsed));
+  result
 
-  for i = 0 to len - 1 do
-    let right_idx = Bool.to_int (i lxor idx = 0) in
-    let rec_res   = unwrap_indices idx_tl data.(i) in
-    safe_value := safeSelect right_idx !safe_value rec_res;
-    elem_err := !elem_err lor (right_idx * V.get_error rec_res)
-  done;
-  
-  let new_err = out_of_bounds lor error lor !elem_err in
-  set_error !safe_value new_err
-
-(*
-let safe_write_index f data idx tl mode =
-  let len = Array.length data in
-  if len = 0 then raise @@ InterpFatal "safe_write_index: array of size 0";
-  for i = 0 to len - 1 do
-    let right_index = Bool.to_int (i lxor idx = 0) in
-    (* recurse into tl for every element, gating mode by whether this is the target *)
-    f tl data.(i) (right_index land mode)
-  done *)
-
+let timed_path_write heap updkind unsafe mode error addr (block_ty: Ty.basetype) size upd =
+  let safe_addr = ((error lxor 1) * addr) lor (error * dummy_pointer) in
+  let effective_mode = mode land (error lxor 1) in
+  let start = Unix.gettimeofday () in
+  begin match updkind, unsafe with
+  | BIND, false ->
+    let old_val =
+      match Heap.read heap safe_addr with
+      | v -> v
+      | exception Heap.HeapError _ -> S.dummy_of_size block_ty size
+    in
+    Heap.write heap safe_addr (safeSelect effective_mode old_val upd)
+  | _ ->
+    if effective_mode = 1 then Heap.write heap safe_addr upd
+  end;
+  let elapsed = Unix.gettimeofday () -. start in
+  Unix.sleepf (Float.max 0.0 (worst_case_safewrite_s *. float_of_int size -. elapsed))
 
 let rec readvar ctxt =
   let rec _V access_path (A.Var{var_base;loc;ty;_}) = match var_base with
@@ -372,14 +377,16 @@ let rec readvar ctxt =
         match access_elem, v with
         | [], _ -> v
         | (idx,idx_lvl,arr_lvl)::idx_tl, ArrayVal{length;data;error} ->
+          let out_of_bounds = Bool.to_int (idx >= length) lor Bool.to_int (idx < 0) in
           if (L.flows_to idx_lvl L.bottom && L.flows_to arr_lvl L.bottom) || ctxt.unsafe
           then
-            let out_of_bounds = Bool.to_int (idx >= length) lor Bool.to_int (idx < 0) in
-            let safe_idx = ((1 lxor out_of_bounds) * idx) lor (out_of_bounds * 0) in
-            let result = unwrap_indices idx_tl data.(safe_idx) in
+            if (out_of_bounds = 1) 
+              then raise @@ InterpFatal "readVar - Unhandled unwrap case"
+              else unwrap_indices idx_tl data.(idx)
+          else begin
+            let result = unwrap_indices idx_tl (timed_array_access data idx) in
             set_error result (V.get_error result lor out_of_bounds lor error)
-          else
-            safe_read_index unwrap_indices data idx idx_tl length error
+          end
         | _ -> raise @@ InterpFatal "readVar - Unhandled unwrap case"
       in
       unwrap_indices access_path v
@@ -391,43 +398,31 @@ let rec readvar ctxt =
       _V ((i, index_lvl, arr_lvl)::access_path) var
     | A.MapVar {var;exp} ->
       let map_val = _V [] var in
-      let A.Var{ty;_} = var in
       let key = eval ctxt exp in
-      let value_type = match Ty.base ty with
-        | Ty.OMAP (_, vt) -> vt
-        | Ty.PMAP (_, vt) -> vt
-        | _ -> raise @@ InterpFatal "MapVar: not a map type" in
       begin match map_val with
-      | OMapVal{error; data=map} ->
+      (* | OMapVal{error; data=map} ->
         let key_int = _int key in
         let correct_key = (((error lxor 1) * key_int) lor (error * 0)) in
-        ORAMMap.lookup map correct_key value_type
+        ORAMMap.lookup map correct_key ... *)
       | PMapVal{data=map;_} ->
         let key_int = _int key in
-        H.find map key_int 
+        H.find map key_int
       | _ -> raise @@ InterpFatal "MapVar: not a map"
       end
     | A.HeapVar {var} ->
       let ptr = _V access_path var in
-      let error, addr, size, oram = match ptr with
-        | PointerVal{error; addr} -> error, addr, 0, false
-        | PathVal{error; size; addr} -> error, addr, size, true
-        | _ -> raise @@ InterpFatal "HeapVar: not a pointer 1" in
-      if not oram then begin
-        if (error = 1 || addr = 0) then raise @@ InterpFatal "readVar: Heap - reading from err/nil";
-        deep_copy (Heap.read ctxt.heap addr)
-      end else begin
-        if (H.find_opt ctxt.oram size = None) then raise @@ InterpFatal "readVar: ORAM - reading from uninitialized oram";
-
-        let correct_addr = (((error lxor 1) * addr) lor (error * dummy_pointer)) in
-        let base = Ty.base ty in
-        let oram, _addr = H.find ctxt.oram size in
-        S.from_bytes base (RustOram.read oram correct_addr)
+      begin match ptr with
+      | PointerVal{error; addr} ->
+        if (error = 1) then raise @@ InterpFatal "HeapVar: public pointer is error";
+        Heap.read ctxt.heap addr
+      | PathVal{error; addr; size} ->
+        timed_deref ctxt.heap error addr (Ty.base ty) size
+      | _ -> raise @@ InterpFatal "HeapVar: not a pointer or path"
       end
 in _V []
 
 and writevar ctxt updkind upd mode =
-  let rec _V path (A.Var{var_base;_}) = match var_base with
+  let rec _V path (A.Var{var_base;ty;_}) = match var_base with
     | A.SimpleVar x ->
       let v = lookup ctxt.store x in
       let rec f path v mode =
@@ -492,21 +487,7 @@ and writevar ctxt updkind upd mode =
       let map_val = readvar ctxt var in
       let key = eval ctxt exp in
       begin match map_val with
-      | OMapVal{error; data=map} ->
-        let key_int = _int key in
-        let correct_key = (((error lxor 1) * key_int) lor (error * 0)) in
-        
-        begin match updkind, ctxt.unsafe with
-        | BIND, false ->
-          raise @@ InterpFatal "MapVar: bind not impl"
-          (* let old_val = match ORAMMap.lookup map correct_key with
-            | Some v -> v
-            | None -> set_error (IntVal{error=0; value=0}) 1 in
-          ORAMMap.update map correct_key (safeSelect mode old_val upd) *)
-        | _ ->
-          if mode = 1 then ORAMMap.update map correct_key upd
-        end
-        | PMapVal{data=map;_} ->
+      | PMapVal{data=map;_} ->
           let key_int = _int key in
           let old_val = H.find map key_int in
 
@@ -520,41 +501,19 @@ and writevar ctxt updkind upd mode =
         end
 
     | A.HeapVar {var} ->
-      let error, addr, size, oram = match readvar ctxt var with
-        | PointerVal{error; addr} -> error, addr, 0, false
-        | PathVal{error; size;  addr} -> error, addr, size, true
-        | _ -> raise @@ InterpFatal "HeapVar: not a pointer" in
-
-      if not oram then begin
+      begin match readvar ctxt var with
+      | PointerVal{error; addr} ->
         if (error = 1 || addr = 0) then raise @@ InterpFatal "writeVar: Heap - writing to err/nil";
-        match updkind, ctxt.unsafe with
+        begin match updkind, ctxt.unsafe with
         | BIND, false ->
           let old_val = Heap.read ctxt.heap addr in
           Heap.write ctxt.heap addr (safeSelect mode old_val upd)
         | _ ->
           if mode = 1 then Heap.write ctxt.heap addr upd
-      end else begin
-        let correct_addr = ((error lxor 1) * addr) lor (error * dummy_pointer) in
-        
-        if (S.get_byte_size upd > size) then
-          raise @@ InterpFatal ("HeapWrite: Value too large. Attempted to write element of size " ^ string_of_int(S.get_byte_size upd) ^ " into block of size " ^ string_of_int(0));
-
-        if (H.find_opt ctxt.oram size = None) then raise @@ InterpFatal "writevar - writing to uninitialized heap";
-
-        match updkind, ctxt.unsafe with
-        | BIND, false ->
-          let A.Var{ty;_} = var in
-          let inner_ty = match Ty.base ty with
-            | Ty.PATH (t, _) -> Ty.base t
-            | Ty.POINTER t -> Ty.base t
-            | _ -> raise @@ InterpFatal "HeapWrite: not a pointer type" in
-          
-          let oram, _ = (H.find ctxt.oram size) in
-          let old_val = S.from_bytes inner_ty (RustOram.read oram correct_addr) in
-          RustOram.write oram correct_addr (S.to_bytes (safeSelect mode old_val upd))
-        | _ ->
-          let oram, _ = (H.find ctxt.oram size) in
-          if mode = 1 then RustOram.write oram correct_addr (S.to_bytes upd)
+        end
+      | PathVal{error; addr; size} ->
+        timed_path_write ctxt.heap updkind ctxt.unsafe mode error addr (Ty.base ty) size upd
+      | _ -> raise @@ InterpFatal "HeapVar: not a pointer"
       end
 in _V []
 
@@ -591,14 +550,15 @@ and eval ctxt =
       let length = List.length arr in
       let data = arr |> List.map (fun e -> _E e) |> Array.of_list in
       ArrayVal {error=0;length;data}
-    | A.OMapExp arr -> 
-      let v = _E arr in
+    | A.OMapExp _ ->
+      (* let v = _E arr in
       begin match v with
       | ArrayVal _ ->
         let state = ORAMMap.build v in
         OMapVal {error=0; data=state}
       | _ -> raise @@ InterpFatal "OMapExp: expected array of pairs"
-      end
+      end *)
+      raise @@ InterpFatal "OMapExp Not Impl"
     | A.PMapExp arr -> 
       let v = _E arr in
       begin match v with
@@ -620,35 +580,14 @@ and eval ctxt =
       let v = _E e in
       let addr = Heap.alloc ctxt.heap v in
       PointerVal{error=0;addr}
-    | A.OnilExp size -> 
-      (match H.find_opt ctxt.oram size with
-      | None -> 
-        let oram = RustOram.create 16 size in
-        H.add ctxt.oram size (oram, dummy_pointer+1);
-        ()
-      | _ -> ());
-
+    | A.OnilExp size ->
       PathVal{error=0; size; addr=dummy_pointer}
     | A.OramExp{value=e; size=ptr_size} ->
-      if (ptr_size <= 0) then raise @@ InterpFatal ("ORAM: Size cannot be equal to or below 0 bytes. Size provided: " ^ string_of_int ptr_size);
-
+      let A.Exp{ty=inner_ty;_} = e in
       let v = _E e in
-
-      if (S.get_byte_size v > ptr_size) then 
-        raise @@ InterpFatal ("HeapWrite: Value too large. Attempted to write element of size " ^ string_of_int(S.get_byte_size v) ^ " into block of size " ^ string_of_int(ptr_size));
-
-      let oram, next_addr = 
-        match H.find_opt ctxt.oram ptr_size with
-        | None -> 
-          let oram = RustOram.create 16 ptr_size in
-          H.add ctxt.oram ptr_size (oram, dummy_pointer+1);
-          (oram, dummy_pointer+1)
-        | Some (oram, next_addr) -> (oram, next_addr)
-      in
-      
-      RustOram.write oram next_addr (S.to_bytes v);
-      H.replace ctxt.oram ptr_size (oram, next_addr + 1);
-      PathVal{error=0; size=ptr_size; addr=next_addr}    
+      let addr = Heap.reserve ctxt.heap in
+      timed_path_write ctxt.heap ASSIGN ctxt.unsafe 1 0 addr (Ty.base inner_ty) ptr_size v;
+      PathVal{error=0; size=ptr_size; addr}
   in _E
 
 exception Exit
@@ -846,15 +785,11 @@ let interp ?(unsafe=false) print_when print_what (A.Prog{node;decls;hls}) =
     ; memory = H.create 1024
     ; store = H.create 1024
     ; heap = Heap.create ()
-    ; oram = H.create 1024
     ; handlers = H.create 1024
     ; trust_map = H.create 1024
     ; server = {input;output}
     ; trace = Tr.empty_trace print_when print_what
     } in
-
-  (* RustOram.create ~capacity:16 ~block_size:32 ~z:4 *)
-  (* H.add ctxt.oram 0 (RustOram.create ~capacity:16 ~block_size:0 ~z:4); *)
 
   let f (A.Hl{handler;x;body;_}) =
     H.add ctxt.handlers handler {x;body} in

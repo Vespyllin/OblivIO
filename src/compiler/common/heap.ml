@@ -14,9 +14,13 @@ let create () = {
   next_address = 1;
 }
 
-let alloc h v =
+let reserve h =
   let addr = h.next_address in
   h.next_address <- h.next_address + 1;
+  addr
+
+let alloc h v =
+  let addr = reserve h in
   H.replace h.store addr v;
   addr
 
