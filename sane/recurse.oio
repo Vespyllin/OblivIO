@@ -8,8 +8,8 @@ var c: err(path((_ * int@{h})@{h})[3]@{h}) = onil(3);
 var d: err(path((_ * int@{h})@{h})[3]@{h}) = onil(3);
 
 START@{} (ignored: int@{}) {
-    c = oram(
-            (oram(
+    c = oalloc(
+            (oalloc(
                 (onil(3), 
             6), 3), 
         5), 3);

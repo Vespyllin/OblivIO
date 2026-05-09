@@ -9,7 +9,7 @@ type value =
 | ArrayVal of {error: int; length: int; data: value array}
 | PointerVal of {error: int; addr: int}
 | PathVal of {error: int; size: int; addr: int}
-| PMapVal of {error: int; data: (int, value) H.t}
+| HMapVal of {error: int; data: (int, value) H.t}
 
 let rec to_string = function
   | StringVal {error; length;data} ->
@@ -38,7 +38,7 @@ let rec to_string = function
   | PathVal {error;size;addr} ->
       if error = 1 then "ErrPtr" else
       "path(" ^ string_of_int addr ^ ")[" ^ string_of_int size ^ "]"
-  | PMapVal _ -> "pmap"
+  | HMapVal _ -> "map"
 
 let rec size = function 
   | IntVal _                                    ->    8
@@ -47,7 +47,7 @@ let rec size = function
   | ArrayVal {data;  _}            ->    8 + (8*Array.length data)
   | PointerVal _                                ->    8
   | PathVal _                                   ->    8
-  | PMapVal _                                   ->    -1
+  | HMapVal _                                   ->    -1
 
 
 let set_error (v: value) error : value =
@@ -58,7 +58,7 @@ let set_error (v: value) error : value =
   | StringVal {length; data; _} -> StringVal {error; length; data}
   | ArrayVal {length; data; _} -> ArrayVal {error; length; data}
   | PairVal{data;_} -> PairVal{error; data}
-  | PMapVal {data; _} -> PMapVal {error; data}
+  | HMapVal {data; _} -> HMapVal {error; data}
 
 let get_error = function
   | IntVal {error; _} -> error
@@ -67,4 +67,4 @@ let get_error = function
   | StringVal {error; _} -> error
   | ArrayVal {error; _} -> error
   | PairVal{error;_} -> error
-  | PMapVal {error; _} -> error
+  | HMapVal {error; _} -> error

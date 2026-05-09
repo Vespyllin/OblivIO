@@ -95,8 +95,8 @@ let timed_array_read (timing: timing) (data: value array) (error: int) (length: 
   let result = if in_bounds = 1 then data.(idx) else dummy in
 
   let elapsed = Unix.gettimeofday () -. start in
+  Unix.sleepf (max 0.0 (wc -. elapsed));
   if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_array_read: elapsed %f exceeded worst-case %f" elapsed wc);
-  Unix.sleepf (wc -. elapsed);
   result
 
 let timed_array_write (timing: timing) (data: value array) (error: int) (length: int) (idx: int) (upd: value) : unit =
@@ -106,8 +106,8 @@ let timed_array_write (timing: timing) (data: value array) (error: int) (length:
   if (idx < length && idx >= 0 && error = 0) then data.(idx) <- upd;
 
   let elapsed = Unix.gettimeofday () -. start in
-  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_array_write: elapsed %f exceeded worst-case %f" elapsed wc);
-  Unix.sleepf (wc -. elapsed)
+  Unix.sleepf (max 0.0 (wc -. elapsed));
+  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_array_write: elapsed %f exceeded worst-case %f" elapsed wc)
 
 let timed_deref (timing: timing) heap error addr (block_ty: Ty.basetype) size =
   let wc = timing.deref_s in
@@ -121,19 +121,17 @@ let timed_deref (timing: timing) heap error addr (block_ty: Ty.basetype) size =
   in
   let result = set_error heap_result error in
   let elapsed = Unix.gettimeofday () -. start in
-
+  Unix.sleepf (max 0.0 (wc -. elapsed));
   if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_deref: elapsed %f exceeded worst-case %f" elapsed wc);
-  Unix.sleepf (wc -. elapsed);
   result
-
 
 let timed_map_read (timing: timing) (map: (int, value) H.t) (key: int) (dummy: value) : value =
   let wc = timing.map_s in
   let start = Unix.gettimeofday () in
   let result = match H.find_opt map key with Some v -> v | None -> dummy in
   let elapsed = Unix.gettimeofday () -. start in
+  Unix.sleepf (max 0.0 (wc -. elapsed));
   if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_map_read: elapsed %f exceeded worst-case %f" elapsed wc);
-  Unix.sleepf (wc -. elapsed);
   result
 
 let timed_map_write (timing: timing) (map: (int, value) H.t) (key: int) (upd: value) : unit =
@@ -141,16 +139,16 @@ let timed_map_write (timing: timing) (map: (int, value) H.t) (key: int) (upd: va
   let start = Unix.gettimeofday () in
   H.replace map key upd;
   let elapsed = Unix.gettimeofday () -. start in
-  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_map_write: elapsed %f exceeded worst-case %f" elapsed wc);
-  Unix.sleepf (wc -. elapsed)
+  Unix.sleepf (max 0.0 (wc -. elapsed));
+  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_map_write: elapsed %f exceeded worst-case %f" elapsed wc)
 
 let timed_safe_select_elem (timing: timing) (bit: int) (v1: value) (v2: value) : value =
   let wc = timing.select_s in
   let start = Unix.gettimeofday () in
   let result = if bit = 0 then v1 else v2 in
   let elapsed = Unix.gettimeofday () -. start in
+  Unix.sleepf (max 0.0 (wc -. elapsed));
   if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_safe_select_elem: elapsed %f exceeded worst-case %f" elapsed wc);
-  Unix.sleepf (wc -. elapsed);
   result
 
 let safeConcat l (arr1 : char array) (arr2 : char array) =
@@ -281,7 +279,6 @@ let safeSelect (timing: timing) (bit: int) (orig: value) (upd: value) =
       let err = ((bit lxor 1) * e1) lor (bit * e2) in
       PairVal{error=err;data=(_S a1 b1, _S a2 b2)}
     | ArrayVal{error=e1; length=l1; data=d1}, ArrayVal{error=e2; length=l2; data=d2} ->
-      print_string "ARR SS\n";
       let error = ((bit lxor 1) * e1) lor (bit * e2) in
       let arrlen1, arrlen2 = Array.length d1, Array.length d2 in
       let data = if arrlen1 < arrlen2 then Array.copy d2 else Array.copy d1 in
@@ -303,13 +300,13 @@ let timed_path_write (timing: timing) heap error addr size (block_ty: Ty.basetyp
     raise @@ InterpFatal (Printf.sprintf "timed_path_write: value size %d exceeds path size %d" (V.size upd) size);
   let dummy = S.dummy_of_size block_ty size in
   let to_write = safeSelect timing 1 dummy upd in
-  
+
   let wc = timing.safewrite_s in
   let start = Unix.gettimeofday () in
   if (error != 1 && addr != dummy_pointer) then Heap.write heap addr to_write;
   let elapsed = Unix.gettimeofday () -. start in
-  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_path_write: elapsed %f exceeded worst-case %f" elapsed wc);
-  Unix.sleepf (wc -. elapsed)
+  Unix.sleepf (max 0.0 (wc -. elapsed));
+  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_path_write: elapsed %f exceeded worst-case %f" elapsed wc)
 
 let safeConcatArr (arr1: value) (arr2: value) =
   (* TODO Check if sub is oblivious here *)
@@ -517,7 +514,7 @@ let rec readvar ctxt =
       let map_val = _V [] var in
       let key = eval ctxt exp in
       begin match map_val with
-      | PMapVal{data=map;_} ->
+      | HMapVal{data=map;_} ->
         let key_int = _int key in
         if (L.flows_to key_lvl L.bottom && L.flows_to map_lvl L.bottom) || ctxt.unsafe then
           H.find map key_int
@@ -614,7 +611,7 @@ and writevar ctxt updkind upd mode =
       let map_val = readvar ctxt var in
       let key = eval ctxt exp in
       begin match map_val with
-      | PMapVal{data=map;_} ->
+      | HMapVal{data=map;_} ->
         let key_int = _int key in
         let dummy = S.dummy_of_size (Ty.base ty) 0 in
         if (L.flows_to key_lvl L.bottom && L.flows_to map_lvl L.bottom) || ctxt.unsafe then begin
@@ -690,7 +687,7 @@ and eval ctxt =
       let length = List.length arr in
       let data = arr |> List.map (fun e -> _E e) |> Array.of_list in
       ArrayVal {error=0;length;data}
-    | A.PMapExp arr ->
+    | A.HMapExp arr ->
       let v = _E arr in
       begin match v with
       | ArrayVal {error; length; data} ->
@@ -699,11 +696,11 @@ and eval ctxt =
           begin match data.(i) with
           | PairVal{data=(IntVal{value=k;_}, v);_} ->
             H.replace x k v
-          | _ -> raise @@ InterpFatal "PMapExp: expected array of pairs with int keys"
+          | _ -> raise @@ InterpFatal "HMapExp: expected array of pairs with int keys"
           end
         done;
-        PMapVal{error; data=x}
-      | _ -> raise @@ InterpFatal "PMapExp: expected array of pairs"
+        HMapVal{error; data=x}
+      | _ -> raise @@ InterpFatal "HMapExp: expected array of pairs"
       end
     | A.NilExp -> 
       PointerVal{error=0;addr=dummy_pointer}

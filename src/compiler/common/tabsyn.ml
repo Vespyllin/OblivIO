@@ -36,7 +36,7 @@ and exp_base
   | OpExp of { left: exp; oper: oper; right: exp }
   | PairExp of (exp*exp)
   | ArrayExp of exp list
-  | PMapExp of exp
+  | HMapExp of exp
   | AllocExp of exp
   | OramExp of {value: exp; size: int}
 

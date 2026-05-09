@@ -138,7 +138,7 @@ let rec checkAssignable ?self value dest err pos =
   | T.PATH (t_value, s1), T.PATH (t_dest, s2) ->
     if (s1 != s2) then Err.error err pos @@ "cannot assign paths of different sizes: " ^ string_of_int s1 ^ " to " ^ string_of_int s2;
     checkAssignable ?self t_value t_dest err pos
-  | T.PMAP (t_k, t_v), T.PMAP (d_k, d_v) ->
+  | T.HMAP (t_k, t_v), T.HMAP (d_k, d_v) ->
     checkAssignable ?self (T.Type{base=t_k;errable=false;level=L.bottom}) (T.Type{base=d_k;errable=false;level=L.bottom}) err pos;
     checkAssignable ?self (T.Type{base=t_v;errable=false;level=L.bottom}) (T.Type{base=d_v;errable=false;level=L.bottom}) err pos
 
@@ -244,7 +244,7 @@ let rec transExp ({err;_} as ctxt) =
       let e, ty = e_ty @@ transExp ctxt value in
       let base = T.ARRAY ty in
       ArrayExp (List.init length (fun _ -> e)) ^! T.Type{base;errable=false;level=L.bottom}
-    | PMapExp t ->
+    | HMapExp t ->
       let ty = match t with
       | hd::_ ->
         let _, ty = e_ty @@ transExp ctxt hd in
@@ -265,9 +265,9 @@ let rec transExp ({err;_} as ctxt) =
       let arr_ty = T.Type{base=T.ARRAY ty;errable=false;level=L.bottom} in
       let arr_exp = ArrayExp elems ^! arr_ty in
       let base = match T.base ty with
-        | T.PAIR (kt, vt) -> T.PMAP (T.base kt, T.base vt)
-        | _ -> raise @@ NotImplemented "PMapExp: expected pair type" in
-      PMapExp arr_exp ^! T.Type{base;errable=false;level=L.bottom}
+        | T.PAIR (kt, vt) -> T.HMAP (T.base kt, T.base vt)
+        | _ -> raise @@ NotImplemented "HMapExp: expected pair type" in
+      HMapExp arr_exp ^! T.Type{base;errable=false;level=L.bottom}
 
     | NilExp -> NilExp ^! _bot (T.POINTER (T.Type{base=T.ANY;errable=false;level=L.bottom}))
     | OnilExp size -> OnilExp size ^! _bot (T.PATH ((T.Type{base=T.ANY;errable=false;level=L.bottom}), size))
@@ -310,7 +310,7 @@ and transVar ({err;_} as ctxt) =
       let var, vty, vlvl, loc = v_ty_lvl_loc @@ trvar var in
       let exp, ety, elvl = e_ty_lvl @@ transExp ctxt exp in
       let cty = match T.base vty with
-        | T.PMAP (kt, vt) ->
+        | T.HMAP (kt, vt) ->
           let fst_ty = T.Type{base=kt;errable=false;level=L.bottom} in
           let snd_ty = T.Type{base=vt;errable=false;level=L.bottom} in
           checkAssignable ety fst_ty err pos;
@@ -507,7 +507,7 @@ let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
         if not @@ L.flows_to (T.level ty) L.bottom
         then checkOramCompatibleTypes ~strict:true content
         else checkPtrLevels content;
-      | T.PMAP (_, vt) ->
+      | T.HMAP (_, vt) ->
         let vty = T.Type{base=vt; errable=false; level=L.bottom} in
         checkOramCompatibleTypes ~strict:true vty
       | _ -> ()

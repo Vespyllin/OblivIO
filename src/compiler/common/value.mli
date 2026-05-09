@@ -10,7 +10,7 @@ type value =
   | ArrayVal of {error: int; length: int; data: value array}
   | PointerVal of {error: int; addr: int}
   | PathVal of {error: int; size: int; addr: int}
-  | PMapVal of {error: int; data: (int, value) H.t}
+  | HMapVal of {error: int; data: (int, value) H.t}
 
 val to_string: value -> string
 

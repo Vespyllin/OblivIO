@@ -11,7 +11,7 @@ START@{} (ignored: int@{}) {
     output(INT, r[0]);
     output(INT, size(r));
 
-    p = oram([16], 400);
+    p = oalloc([16], 400);
     output(INT, r[0]);
     output(INT, size(r));
     

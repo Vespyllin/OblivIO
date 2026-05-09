@@ -63,14 +63,14 @@ rule token = parse
 | "string"            { STRINGTYPE }
 | "ptr"               { PTRTYPE }
 | "path"              { PATHTYPE }
-| "make_pmap"          { PMAP }
-| "pmap"              { PMAPTYPE }
+| "hmap"               { HMAP }
+| "map"               { HMAPTYPE }
 | "err"               { ERRTYPE }
 | "input"             { INPUT }
 | "output"            { OUTPUT }
 | "exit"              { EXIT }
 | "alloc"             { ALLOC }
-| "oram"              { ORAM }
+| "oalloc"            { ORAM }
 | "array"             { ARRAY }
 | "nil"               { NIL }
 | "onil"              { ONIL }

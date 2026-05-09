@@ -2,8 +2,8 @@ TEST
 
 local channel STR: err(string)@{};
 
-var pub_map: pmap(int, int)@{} = make_pmap([(0, 42)]);
-var priv_map: pmap(int, int)@{h} = make_pmap([(0, 42)]);
+var pub_map: map(int, int)@{} = hmap([(0, 42)]);
+var priv_map: map(int, int)@{h} = hmap([(0, 42)]);
 var i: int@{} = 0;
 var pub_sink: err(int)@{} = 0;
 var priv_sink: err(int)@{h} = 0;
