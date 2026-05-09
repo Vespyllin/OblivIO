@@ -1,0 +1,30 @@
+TEST
+
+local channel STR: err(string)@{};
+
+var pub_ptr: path(int@{})[1]@{} = onil(1);
+var priv_ptr: path(int@{h})[1]@{h} = onil(1);
+var i: int@{} = 0;
+var pub_sink: err(int@{})@{} = 0;
+var priv_sink: err(int@{h})@{h} = 0;
+
+START@{} (ignored: int@{}) {
+    output(STR, "start");
+
+    output(STR, "pub");
+    while i < 100000 do {
+        pub_sink = *pub_ptr;
+        i = i + 1;
+    }
+
+    i = 0;
+
+    output(STR, "priv");
+    while i < 100000 do {
+        priv_sink = *priv_ptr;
+        i = i + 1;
+    }
+
+    output(STR, "ok");
+    exit();
+}

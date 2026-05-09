@@ -22,7 +22,15 @@ type 'a sync_queue =
   ; queue: 'a Queue.t
   }
 
-type context = 
+type timing =
+  { index_s: float
+  ; deref_s: float
+  ; map_s: float
+  ; safewrite_s: float
+  ; select_s: float
+  }
+
+type context =
   { name: string
   ; unsafe: bool
   ; message_queue: M.message sync_queue
@@ -34,12 +42,9 @@ type context =
   ; trust_map: (C.channel, L.level * Ty.ty) H.t
   ; server: server_info
   ; trace: Tr.trace
+  ; timing: timing
   }
 
-let worst_case_index_s = 0.1
-let worst_case_deref_s = 0.1
-let worst_case_map_s = 0.1
-let worst_case_safewrite_s = 1.0
 let dummy_pointer = 0
 
 let enqueue (msg: 'a) (q: 'a sync_queue) =
@@ -81,6 +86,82 @@ let _int = function
 let _string = function
   | StringVal{data;_} -> data |> Array.to_seq |> String.of_seq
   | _ -> raise @@ InterpFatal "_I"
+
+let timed_array_read (timing: timing) (data: value array) (error: int) (length: int) (idx: int) (dummy: value) : value =
+  let wc = timing.index_s in
+  let start = Unix.gettimeofday () in
+
+  let in_bounds = Bool.to_int (idx >= 0) land Bool.to_int (idx < length) land Bool.to_int (error = 0) in
+  let result = if in_bounds = 1 then data.(idx) else dummy in
+
+  let elapsed = Unix.gettimeofday () -. start in
+  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_array_read: elapsed %f exceeded worst-case %f" elapsed wc);
+  Unix.sleepf (wc -. elapsed);
+  result
+
+let timed_array_write (timing: timing) (data: value array) (error: int) (length: int) (idx: int) (upd: value) : unit =
+  let wc = timing.index_s in
+  let start = Unix.gettimeofday () in
+
+  if (idx < length && idx >= 0 && error = 0) then data.(idx) <- upd;
+
+  let elapsed = Unix.gettimeofday () -. start in
+  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_array_write: elapsed %f exceeded worst-case %f" elapsed wc);
+  Unix.sleepf (wc -. elapsed)
+
+let timed_deref (timing: timing) heap error addr (block_ty: Ty.basetype) size =
+  let wc = timing.deref_s in
+  let safe_addr = ((error lxor 1) * addr) lor (error * dummy_pointer) in
+  let dummy = S.dummy_of_size block_ty size in
+  let start = Unix.gettimeofday () in
+  let heap_result =
+    match Heap.read heap safe_addr with
+    | v -> v
+    | exception Heap.HeapError _ -> dummy
+  in
+  let result = set_error heap_result error in
+  let elapsed = Unix.gettimeofday () -. start in
+
+  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_deref: elapsed %f exceeded worst-case %f" elapsed wc);
+  Unix.sleepf (wc -. elapsed);
+  result
+
+let timed_path_write (timing: timing) heap error addr size upd =
+  if V.size upd > size then raise @@ InterpFatal (Printf.sprintf "timed_path_write: value size %d exceeds path size %d" (V.size upd) size);
+  let wc = timing.safewrite_s in
+  let start = Unix.gettimeofday () in
+
+  if (error != 1 && addr != dummy_pointer) then Heap.write heap addr upd;
+  
+  let elapsed = Unix.gettimeofday () -. start in
+  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_path_write: elapsed %f exceeded worst-case %f" elapsed wc);
+  Unix.sleepf (wc -. elapsed)
+
+let timed_map_read (timing: timing) (map: (int, value) H.t) (key: int) (dummy: value) : value =
+  let wc = timing.map_s in
+  let start = Unix.gettimeofday () in
+  let result = match H.find_opt map key with Some v -> v | None -> dummy in
+  let elapsed = Unix.gettimeofday () -. start in
+  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_map_read: elapsed %f exceeded worst-case %f" elapsed wc);
+  Unix.sleepf (wc -. elapsed);
+  result
+
+let timed_map_write (timing: timing) (map: (int, value) H.t) (key: int) (upd: value) : unit =
+  let wc = timing.map_s in
+  let start = Unix.gettimeofday () in
+  H.replace map key upd;
+  let elapsed = Unix.gettimeofday () -. start in
+  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_map_write: elapsed %f exceeded worst-case %f" elapsed wc);
+  Unix.sleepf (wc -. elapsed)
+
+let timed_safe_select_elem (timing: timing) (bit: int) (v1: value) (v2: value) : value =
+  let wc = timing.select_s in
+  let start = Unix.gettimeofday () in
+  let result = if bit = 0 then v1 else v2 in
+  let elapsed = Unix.gettimeofday () -. start in
+  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_safe_select_elem: elapsed %f exceeded worst-case %f" elapsed wc);
+  Unix.sleepf (wc -. elapsed);
+  result
 
 let safeConcat l (arr1 : char array) (arr2 : char array) =
   let l1 = Array.length arr1 in
@@ -166,7 +247,7 @@ let rec unsafeEq v1 v2 =
     end
   | _ -> raise @@ NotImplemented "unsafeEq"
 
-let safeSelect (bit: int) (orig: value) (upd: value) =
+let safeSelect (timing: timing) (bit: int) (orig: value) (upd: value) =
   let rec _S orig upd =
     match orig, upd with
     | IntVal {error=e1; value=v1}, IntVal {error=e2; value=v2} ->
@@ -210,24 +291,15 @@ let safeSelect (bit: int) (orig: value) (upd: value) =
       let err = ((bit lxor 1) * e1) lor (bit * e2) in
       PairVal{error=err;data=(_S a1 b1, _S a2 b2)}
     | ArrayVal{error=e1; length=l1; data=d1}, ArrayVal{error=e2; length=l2; data=d2} ->
-      let err = ((bit lxor 1) * e1) lor (bit * e2) in
-      begin
-      match Array.length d1, Array.length d2 with
-      | arrlen1, arrlen2 when arrlen1 < arrlen2 ->
-        let length = ((1 lxor bit)*l1) lor (bit*l2) in
-        let data = Array.copy d2 in
-        for i = 0 to arrlen1-1 do
-          data.(i) <- _S d1.(i) d2.(i)
-        done;
-        ArrayVal{error=err; length; data}
-      | _, arrlen2 ->
-        let length = ((1 lxor bit)*l1) lor (bit*l2) in
-        let data = Array.copy d1 in
-        for i = 0 to arrlen2-1 do
-          data.(i) <- _S d1.(i) d2.(i)
-        done;
-        ArrayVal{error=err; length; data}
-      end
+      print_string "ARR SS\n";
+      let error = ((bit lxor 1) * e1) lor (bit * e2) in
+      let arrlen1, arrlen2 = Array.length d1, Array.length d2 in
+      let data = if arrlen1 < arrlen2 then Array.copy d2 else Array.copy d1 in
+      let length = ((1 lxor bit)*l1) lor (bit*l2) in
+      for i = 0 to (min arrlen1 arrlen2) - 1 do
+        data.(i) <- timed_safe_select_elem timing bit d1.(i) d2.(i)
+      done;
+      ArrayVal{error; length; data}
     | PathVal{error=e1; size=s1; addr=v1}, PathVal{error=e2; size=s2; addr=v2} ->
       let err = ((bit lxor 1) * e1) lor (bit * e2) in
       let size = ((bit lxor 1) * s1) lor (bit * s2) in
@@ -249,7 +321,7 @@ let safeConcatArr (arr1: value) (arr2: value) =
     ArrayVal{error=err; length=l1+l2; data}
   | _ -> raise @@ InterpFatal "safeConcatArr: expected two arrays"
 
-let op oper v1 v2 =
+let op (timing: timing) oper v1 v2 =
   match oper,v1,v2 with
   (* POLY *)
   | EqOp, _, _ ->
@@ -288,7 +360,7 @@ let op oper v1 v2 =
   | CaretOp, (ArrayVal _ as v1), (ArrayVal _ as v2) ->
     safeConcatArr v1 v2
   | CoalesceOp, a, b ->
-    safeSelect (V.get_error a) a b
+    safeSelect timing (V.get_error a) a b
   | _ -> raise @@ NotImplemented (V.to_string v1 ^ to_string oper ^ V.to_string v2)
 
 let op_unsafe oper v1 v2 =
@@ -327,70 +399,77 @@ let op_unsafe oper v1 v2 =
 
 type update = ASSIGN | BIND
 
-let timed_array_read (data: value array) (length: int) (idx: int) (dummy: value) : value =
-  print_string "timed read\n";
+let time_op (f: unit -> unit) : float =
   let start = Unix.gettimeofday () in
+  f ();
+  Unix.gettimeofday () -. start
 
-  let safe_idx = min (max idx 0) (Array.length data - 1) in
-  let in_bounds = Bool.to_int (idx >= 0) land Bool.to_int (idx < length) in
-  let result = if in_bounds = 1 then data.(safe_idx) else dummy in
-
-  let elapsed = Unix.gettimeofday () -. start in
-  Unix.sleepf (Float.max 0.0 (worst_case_index_s -. elapsed));
-  result
-
-let timed_array_write (data: value array) (idx: int) (upd: value) : unit =
-  print_string "timed write\n";
-  let start = Unix.gettimeofday () in
-
-  if (idx < Array.length data && idx > 0) then data.(idx) <- upd;
-
-  let elapsed = Unix.gettimeofday () -. start in
-  Unix.sleepf (Float.max 0.0 (worst_case_index_s -. elapsed))
-
-let timed_deref heap error addr (block_ty: Ty.basetype) size =
-  let safe_addr = ((error lxor 1) * addr) lor (error * dummy_pointer) in
-  let dummy = S.dummy_of_size block_ty size in
-
-  let start = Unix.gettimeofday () in
-
-  let heap_result =
-    match Heap.read heap safe_addr with
-    | v -> v
-    | exception Heap.HeapError _ -> dummy
+let calibrate ?(iterations=1000) ?(multiplier=2.0) (): timing =
+  let max_of iters f =
+    let m = ref 0.0 in
+    for _ = 1 to iters do
+      let t = time_op f in
+      if t > !m then m := t
+    done;
+    !m
   in
-  let result = safeSelect (error lxor 1) dummy heap_result in
 
-  let elapsed = Unix.gettimeofday () -. start in
-  Unix.sleepf (Float.max 0.0 (worst_case_deref_s -. elapsed));
-  result
+  let arr_size = 256 in
+  let dummy_int = IntVal{error=0; value=0} in
+  let data = Array.make arr_size dummy_int in
 
-let timed_path_write heap error addr size upd =
-  let start = Unix.gettimeofday () in
+  let index_s =
+    let r = max_of iterations (fun () ->
+      let idx = Random.int arr_size in
+      let _ = if idx < arr_size then data.(idx) else dummy_int in
+      data.(idx) <- IntVal{error=0; value=idx})
+    in r *. multiplier
+  in
 
-  if (error != 1) then Heap.write heap addr upd;
+  let heap = Heap.create () in
+  let addr = Heap.alloc heap dummy_int in
 
-  let elapsed = Unix.gettimeofday () -. start in
+  let deref_s =
+    let r = max_of iterations (fun () ->
+      let _ = match Heap.read heap addr with v -> v | exception Heap.HeapError _ -> dummy_int in
+      ())
+    in r *. multiplier
+  in
 
-  Unix.sleepf (Float.max 0.0 (worst_case_safewrite_s *. float_of_int size -. elapsed))
+  let safewrite_s =
+    let r = max_of iterations (fun () ->
+      Heap.write heap addr (IntVal{error=0;value=42}))
+    in r *. multiplier
+  in
 
-let timed_map_read (map: (int, value) H.t) (key: int) (dummy: value) : value =
-  let start = Unix.gettimeofday () in
+  let map = H.create 256 in
+  for i = 0 to arr_size - 1 do H.replace map i (IntVal{error=0;value=i}) done;
 
-  let result = match H.find_opt map key with Some v -> v | None -> dummy in
+  let map_s =
+    let r = max_of iterations (fun () ->
+      let k = Random.int arr_size in
+      let _ = match H.find_opt map k with Some v -> v | None -> dummy_int in
+      H.replace map k (IntVal{error=0;value=k}))
+    in r *. multiplier
+  in
 
-  let elapsed = Unix.gettimeofday () -. start in
+  let select_s =
+    let r = max_of iterations (fun () ->
+      let bit = Random.int 2 in
+      let _ = if bit = 0 then dummy_int else data.(0) in
+      ())
+    in r *. multiplier
+  in
 
-  Unix.sleepf (Float.max 0.0 (worst_case_map_s -. elapsed));
-  result
+  (* Printf.printf "calibration results (iterations=%d, multiplier=%.1f):\n" iterations multiplier;
+  Printf.printf "  worst_case_index_s    = %f\n" index_s;
+  Printf.printf "  worst_case_deref_s    = %f\n" deref_s;
+  Printf.printf "  worst_case_safewrite_s= %f\n" safewrite_s;
+  Printf.printf "  worst_case_map_s      = %f\n" map_s;
+  Printf.printf "  worst_case_select_s   = %f\n" select_s; *)
+  {index_s; deref_s; map_s; safewrite_s; select_s} 
 
-let timed_map_write (map: (int, value) H.t) (key: int) (upd: value) : unit =
-  let start = Unix.gettimeofday () in
 
-  H.replace map key upd;
-
-  let elapsed = Unix.gettimeofday () -. start in
-  Unix.sleepf (Float.max 0.0 (worst_case_map_s -. elapsed))
 
 let rec readvar ctxt =
   let rec _V access_path (A.Var{var_base;loc;ty;_}) = match var_base with
@@ -415,7 +494,7 @@ let rec readvar ctxt =
               else unwrap_indices idx_tl data.(idx) elem_ty
           else begin
             let dummy = S.dummy_of_size (Ty.base elem_ty) 0 in
-            let result = unwrap_indices idx_tl (timed_array_read data length idx dummy) elem_ty in
+            let result = unwrap_indices idx_tl (timed_array_read ctxt.timing data error length idx dummy) elem_ty in
             set_error result (V.get_error result lor error)
           end
         | _ -> raise @@ InterpFatal "readVar - Unhandled unwrap case"
@@ -440,7 +519,7 @@ let rec readvar ctxt =
         if (L.flows_to key_lvl L.bottom && L.flows_to map_lvl L.bottom) || ctxt.unsafe then
           H.find map key_int
         else
-          timed_map_read map key_int (S.dummy_of_size (Ty.base ty) 0)
+          timed_map_read ctxt.timing map key_int (S.dummy_of_size (Ty.base ty) 0)
       | _ -> raise @@ InterpFatal "MapVar: not a map"
       end
     | A.HeapVar {var} ->
@@ -450,7 +529,7 @@ let rec readvar ctxt =
         if (error = 1) then raise @@ InterpFatal "HeapVar: public pointer is error";
         Heap.read ctxt.heap addr
       | PathVal{error; addr; size} ->
-        timed_deref ctxt.heap error addr (Ty.base ty) size
+        timed_deref ctxt.timing ctxt.heap error addr (Ty.base ty) size
       | _ -> raise @@ InterpFatal "HeapVar: not a pointer or path"
       end
 in _V []
@@ -466,11 +545,11 @@ and writevar ctxt updkind upd mode =
           match updkind, ctxt.unsafe with
           | BIND, false ->
             let orig = lookup ctxt.store x in
-            H.add ctxt.store x @@ safeSelect mode orig upd
+            H.add ctxt.store x @@ safeSelect ctxt.timing mode orig upd
           | _ -> if mode = 1 then
             H.add ctxt.store x upd
           end
-        | [(idx,idx_lvl,arr_lvl)], ArrayVal{length;data; _} ->
+        | [(idx,idx_lvl,arr_lvl)], ArrayVal{length;data; error} ->
           let elem_ty = match Ty.base cur_ty with
             | Ty.ARRAY content -> content
             | _ -> raise @@ InterpFatal "writeVar: expected array type"
@@ -486,11 +565,11 @@ and writevar ctxt updkind upd mode =
             match updkind, ctxt.unsafe with
             | BIND, false ->
               let dummy = S.dummy_of_size (Ty.base elem_ty) 0 in
-              let old_val = timed_array_read data length idx dummy in
-              timed_array_write data idx (safeSelect mode old_val upd)
-            | _ -> if mode = 1 then timed_array_write data idx upd
+              let old_val = timed_array_read ctxt.timing data error length idx dummy in
+              timed_array_write ctxt.timing data error length idx (safeSelect ctxt.timing mode old_val upd)
+            | _ -> if mode = 1 then timed_array_write ctxt.timing data error length idx upd
           end
-        | (i,idx_lvl,arr_lvl)::tl, ArrayVal{length;data; _} ->
+        | (i,idx_lvl,arr_lvl)::tl, ArrayVal{length;data;error} ->
           let elem_ty = match Ty.base cur_ty with
             | Ty.ARRAY content -> content
             | _ -> raise @@ InterpFatal "writeVar: expected array type"
@@ -508,9 +587,9 @@ and writevar ctxt updkind upd mode =
               let dummy = S.dummy_of_size (Ty.base elem_ty) 0 in
               begin match updkind, ctxt.unsafe with
               | BIND, false ->
-                let old_val = timed_array_read data length idx dummy in
-                timed_array_write data idx (safeSelect mode old_val upd)
-              | _ -> if mode = 1 then timed_array_write data idx upd
+                let old_val = timed_array_read ctxt.timing data error length idx dummy in
+                timed_array_write ctxt.timing data error length idx (safeSelect ctxt.timing mode old_val upd)
+              | _ -> if mode = 1 then timed_array_write ctxt.timing data error length idx upd
               end
             | _ -> raise @@ InterpFatal "writeVar: nested private array (impossible by semant)"
             end
@@ -542,9 +621,9 @@ and writevar ctxt updkind upd mode =
         end else begin
           match updkind, ctxt.unsafe with
           | BIND, false ->
-            let old_val = timed_map_read map key_int dummy in
-            timed_map_write map key_int (safeSelect mode old_val upd)
-          | _ -> if mode = 1 then timed_map_write map key_int upd
+            let old_val = timed_map_read ctxt.timing map key_int dummy in
+            timed_map_write ctxt.timing map key_int (safeSelect ctxt.timing mode old_val upd)
+          | _ -> if mode = 1 then timed_map_write ctxt.timing map key_int upd
         end
       | _ -> raise @@ InterpFatal "MapVar: not a map"
       end
@@ -556,7 +635,7 @@ and writevar ctxt updkind upd mode =
         begin match updkind, ctxt.unsafe with
         | BIND, false ->
           let old_val = Heap.read ctxt.heap addr in
-          Heap.write ctxt.heap addr (safeSelect mode old_val upd)
+          Heap.write ctxt.heap addr (safeSelect ctxt.timing mode old_val upd)
         | _ ->
           if mode = 1 then Heap.write ctxt.heap addr upd
         end
@@ -568,8 +647,8 @@ and writevar ctxt updkind upd mode =
             | v -> v
             | exception Heap.HeapError _ -> S.dummy_of_size (Ty.base ty) size
           in
-          timed_path_write ctxt.heap error addr size (safeSelect mode old_val upd)
-        | _ -> if mode = 1 then timed_path_write ctxt.heap error addr size upd
+          timed_path_write ctxt.timing ctxt.heap error addr size (safeSelect ctxt.timing mode old_val upd)
+        | _ -> if mode = 1 then timed_path_write ctxt.timing ctxt.heap error addr size upd
         end
       | _ -> raise @@ InterpFatal "HeapVar: not a pointer"
       end
@@ -601,7 +680,7 @@ and eval ctxt =
       let v2 = _E right in
       if ctxt.unsafe
       then op_unsafe oper v1 v2
-      else op oper v1 v2
+      else op ctxt.timing oper v1 v2
     | A.PairExp (a,b) ->
       PairVal{error=0;data=(_E a,_E b)}
     | A.ArrayExp arr ->
@@ -635,7 +714,7 @@ and eval ctxt =
       let A.Exp{ty=_inner_ty;_} = e in
       let v = _E e in
       let addr = Heap.reserve ctxt.heap in
-      timed_path_write ctxt.heap 0 addr ptr_size v;
+      timed_path_write ctxt.timing ctxt.heap 0 addr ptr_size v;
       PathVal{error=0; size=ptr_size; addr}
   in _E
 
@@ -710,7 +789,7 @@ let interpCmd ctxt =
       let s1 = StringVal{error=0;length=max_len;data=ctxt.input_buffer} in
       let s2 = StringVal{error=0;length=max_len;data=buf_upd} in
       begin
-        match safeSelect shouldBind s1 s2 with
+        match safeSelect ctxt.timing shouldBind s1 s2 with
         | StringVal{data;_} ->
           ctxt.input_buffer <- data
         | _ -> raise @@ InterpFatal "InputCmd"
@@ -819,6 +898,8 @@ let rec prompt ctxt () =
 
 
 let interp ?(unsafe=false) print_when print_what (A.Prog{node;decls;hls}) =
+  let timing = calibrate ~iterations:100000 () in
+
   let inet_addr = Unix.inet_addr_of_string "127.0.0.1" in
   let sockaddr = Unix.ADDR_INET (inet_addr,3050) in
   let input,output = Unix.open_connection sockaddr in
@@ -826,7 +907,7 @@ let interp ?(unsafe=false) print_when print_what (A.Prog{node;decls;hls}) =
   let ctxt =
     { name = node
     ; unsafe
-    ; message_queue = 
+    ; message_queue =
       { lock = Mutex.create ()
       ; queue = Queue.create ()
       }
@@ -838,6 +919,7 @@ let interp ?(unsafe=false) print_when print_what (A.Prog{node;decls;hls}) =
     ; trust_map = H.create 1024
     ; server = {input;output}
     ; trace = Tr.empty_trace print_when print_what
+    ; timing
     } in
 
   let f (A.Hl{handler;x;body;_}) =

@@ -1,0 +1,30 @@
+TEST
+
+local channel STR: err(string)@{};
+
+var pub_map: pmap(int, int)@{} = make_pmap([(0, 42)]);
+var priv_map: pmap(int, int)@{h} = make_pmap([(0, 42)]);
+var i: int@{} = 0;
+var pub_sink: err(int)@{} = 0;
+var priv_sink: err(int)@{h} = 0;
+
+START@{} (ignored: int@{}) {
+    output(STR, "start");
+
+    output(STR, "pub");
+    while i < 100000 do {
+        pub_sink = pub_map[[0]];
+        i = i + 1;
+    }
+
+    i = 0;
+
+    output(STR, "priv");
+    while i < 100000 do {
+        priv_sink = priv_map[[0]];
+        i = i + 1;
+    }
+
+    output(STR, "ok");
+    exit();
+}

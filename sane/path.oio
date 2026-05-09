@@ -1,0 +1,25 @@
+TEST
+
+local channel INT: err(int)@{h};
+local channel STR: err(string)@{};
+
+var p: path(int@{h}[]@{h})[400]@{h} = onil(400);
+var r: err(int@{h}[])@{h} = [0];
+
+START@{} (ignored: int@{}) {
+    r = *p;
+    output(INT, r[0]);
+    output(INT, size(r));
+
+    p = oram([16], 400);
+    output(INT, r[0]);
+    output(INT, size(r));
+    
+    r = *p;
+    output(INT, r[0]);
+    output(INT, size(r));
+
+    output(STR, "ok");
+
+    exit();
+}

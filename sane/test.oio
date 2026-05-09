@@ -1,21 +1,8 @@
 TEST
 
-local channel STR: err(string)@{};
-local channel INT: err(int)@{h};
-
-var arr1: int@{h}[]@{}[]@{} = [[0]; [5]];
-var arr2: int@{h}[]@{}[]@{} = [[4]; [1; 2]; [3]];
-
-var arr3: err(int@{h}[])@{} = [3];
-var arr4: err(int)@{h} = 3;
+local channel STR: string@{};
 
 START@{} (ignored: int@{}) { 
-    arr3 = arr1[0];
-    arr4 = arr3[0];
-    // output(INT, arr1[0]);       
-    // output(INT, arr1[1][0]);       
-    
-
     output(STR, "ok");
     exit();
 }
