@@ -126,16 +126,6 @@ let timed_deref (timing: timing) heap error addr (block_ty: Ty.basetype) size =
   Unix.sleepf (wc -. elapsed);
   result
 
-let timed_path_write (timing: timing) heap error addr size upd =
-  if V.size upd > size then raise @@ InterpFatal (Printf.sprintf "timed_path_write: value size %d exceeds path size %d" (V.size upd) size);
-  let wc = timing.safewrite_s in
-  let start = Unix.gettimeofday () in
-
-  if (error != 1 && addr != dummy_pointer) then Heap.write heap addr upd;
-  
-  let elapsed = Unix.gettimeofday () -. start in
-  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_path_write: elapsed %f exceeded worst-case %f" elapsed wc);
-  Unix.sleepf (wc -. elapsed)
 
 let timed_map_read (timing: timing) (map: (int, value) H.t) (key: int) (dummy: value) : value =
   let wc = timing.map_s in
@@ -307,6 +297,19 @@ let safeSelect (timing: timing) (bit: int) (orig: value) (upd: value) =
       PathVal{error=err; size; addr}
     | _ -> raise @@ InterpFatal ("safeSelect: " ^ (V.to_string orig) ^  ", " ^ (V.to_string upd)) in
   _S orig upd
+
+let timed_path_write (timing: timing) heap error addr size (block_ty: Ty.basetype) upd =
+  if V.size upd > size then
+    raise @@ InterpFatal (Printf.sprintf "timed_path_write: value size %d exceeds path size %d" (V.size upd) size);
+  let dummy = S.dummy_of_size block_ty size in
+  let to_write = safeSelect timing 1 dummy upd in
+  
+  let wc = timing.safewrite_s in
+  let start = Unix.gettimeofday () in
+  if (error != 1 && addr != dummy_pointer) then Heap.write heap addr to_write;
+  let elapsed = Unix.gettimeofday () -. start in
+  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_path_write: elapsed %f exceeded worst-case %f" elapsed wc);
+  Unix.sleepf (wc -. elapsed)
 
 let safeConcatArr (arr1: value) (arr2: value) =
   (* TODO Check if sub is oblivious here *)
@@ -647,8 +650,8 @@ and writevar ctxt updkind upd mode =
             | v -> v
             | exception Heap.HeapError _ -> S.dummy_of_size (Ty.base ty) size
           in
-          timed_path_write ctxt.timing ctxt.heap error addr size (safeSelect ctxt.timing mode old_val upd)
-        | _ -> if mode = 1 then timed_path_write ctxt.timing ctxt.heap error addr size upd
+          timed_path_write ctxt.timing ctxt.heap error addr size (Ty.base ty) (safeSelect ctxt.timing mode old_val upd)
+        | _ -> if mode = 1 then timed_path_write ctxt.timing ctxt.heap error addr size (Ty.base ty) upd
         end
       | _ -> raise @@ InterpFatal "HeapVar: not a pointer"
       end
@@ -711,10 +714,10 @@ and eval ctxt =
     | A.OnilExp size ->
       PathVal{error=0; size; addr=dummy_pointer}
     | A.OramExp{value=e; size=ptr_size} ->
-      let A.Exp{ty=_inner_ty;_} = e in
+      let A.Exp{ty=inner_ty;_} = e in
       let v = _E e in
       let addr = Heap.reserve ctxt.heap in
-      timed_path_write ctxt.timing ctxt.heap 0 addr ptr_size v;
+      timed_path_write ctxt.timing ctxt.heap 0 addr ptr_size (Ty.base inner_ty) v;
       PathVal{error=0; size=ptr_size; addr}
   in _E
 
