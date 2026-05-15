@@ -1,8 +1,15 @@
 TEST
 
-local channel STR: string@{};
+local channel STR: string@{h};
+local channel INT: err(int)@{h};
+
+var priv_path256:   path(int@{h}[]@{h})[256]@{h}    = oalloc([256],256);
+var deref:          err(int@{h}[])@{h}              = array(1, 32);
+var deref2:         err(int@{h}[])@{h}              = [1];
+
 
 START@{} (ignored: int@{}) { 
+    output(INT, deref[0]);
     output(STR, "ok");
     exit();
 }
