@@ -1,0 +1,11 @@
+STR> "ptr read pub"
+STR> "ok"
+calibration time: 0.031022s
+program runtime:  0.071944s
+operation          calib_s       sleep_s          wc_s
+index             0.000130      0.000000      0.000000
+deref             0.000300      0.000000      0.000000
+map               0.000280      0.000000      0.000000
+safewrite         0.000017      0.000000      0.000000
+select            0.000012      0.000000      0.000000
+total                           0.000000      0.000000

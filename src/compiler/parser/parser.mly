@@ -88,7 +88,7 @@ exp_base:
 | e=binop_exp       { e }
 | FST exp=exp       { ProjExp {proj=Fst; exp} }
 | SND exp=exp       { ProjExp {proj=Snd; exp} }
-| ONIL LPAREN i=INT RPAREN        
+| ONIL LPAREN i=INT RPAREN
   { OnilExp i }
 | pair=paren(spair(exp,COMMA,exp))
   { PairExp pair }

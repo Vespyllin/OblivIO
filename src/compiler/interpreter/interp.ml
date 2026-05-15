@@ -7,7 +7,6 @@ module V = Common.Value
 module Ty = Common.Types
 module Tr = Common.Trace
 module C = Common.Channel
-module S = Common.Serialize
 module Heap = Common.Heap
 
 
@@ -28,6 +27,13 @@ type timing =
   ; map_s: float
   ; safewrite_s: float
   ; select_s: float
+  ; index_sleep: float ref;    index_wc: float ref
+  ; deref_sleep: float ref;    deref_wc: float ref
+  ; map_sleep: float ref;      map_wc: float ref
+  ; safewrite_sleep: float ref; safewrite_wc: float ref
+  ; select_sleep: float ref;   select_wc: float ref
+  ; calib_s: float
+  ; prog_start: float
   }
 
 type context =
@@ -86,68 +92,35 @@ let _int = function
 let _string = function
   | StringVal{data;_} -> data |> Array.to_seq |> String.of_seq
   | _ -> raise @@ InterpFatal "_I"
-
-let timed_array_read (timing: timing) (data: value array) (error: int) (length: int) (idx: int) (dummy: value) : value =
-  let wc = timing.index_s in
-  let start = Unix.gettimeofday () in
-
-  let in_bounds = Bool.to_int (idx >= 0) land Bool.to_int (idx < length) land Bool.to_int (error = 0) in
-  let result = if in_bounds = 1 then data.(idx) else dummy in
-
-  let elapsed = Unix.gettimeofday () -. start in
-  Unix.sleepf (max 0.0 (wc -. elapsed));
-  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_array_read: elapsed %f exceeded worst-case %f" elapsed wc);
-  result
-
-let timed_array_write (timing: timing) (data: value array) (error: int) (length: int) (idx: int) (upd: value) : unit =
-  let wc = timing.index_s in
-  let start = Unix.gettimeofday () in
-
-  if (idx < length && idx >= 0 && error = 0) then data.(idx) <- upd;
-
-  let elapsed = Unix.gettimeofday () -. start in
-  Unix.sleepf (max 0.0 (wc -. elapsed));
-  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_array_write: elapsed %f exceeded worst-case %f" elapsed wc)
-
-let timed_deref (timing: timing) heap error addr (block_ty: Ty.basetype) size =
-  let wc = timing.deref_s in
-  let safe_addr = ((error lxor 1) * addr) lor (error * dummy_pointer) in
-  let dummy = S.dummy_of_size block_ty size in
-  let start = Unix.gettimeofday () in
-  let heap_result =
-    match Heap.read heap safe_addr with
-    | v -> v
-    | exception Heap.HeapError _ -> dummy
-  in
-  let result = set_error heap_result error in
-  let elapsed = Unix.gettimeofday () -. start in
-  Unix.sleepf (max 0.0 (wc -. elapsed));
-  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_deref: elapsed %f exceeded worst-case %f" elapsed wc);
-  result
-
-let timed_map_read (timing: timing) (map: (int, value) H.t) (key: int) (dummy: value) : value =
-  let wc = timing.map_s in
-  let start = Unix.gettimeofday () in
-  let result = match H.find_opt map key with Some v -> v | None -> dummy in
-  let elapsed = Unix.gettimeofday () -. start in
-  Unix.sleepf (max 0.0 (wc -. elapsed));
-  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_map_read: elapsed %f exceeded worst-case %f" elapsed wc);
-  result
-
-let timed_map_write (timing: timing) (map: (int, value) H.t) (key: int) (upd: value) : unit =
-  let wc = timing.map_s in
-  let start = Unix.gettimeofday () in
-  H.replace map key upd;
-  let elapsed = Unix.gettimeofday () -. start in
-  Unix.sleepf (max 0.0 (wc -. elapsed));
-  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_map_write: elapsed %f exceeded worst-case %f" elapsed wc)
+let rec dummy_of_size (ty: Ty.basetype) (size: int) : value =
+  match ty with
+  | Ty.INT ->
+    IntVal{error=1; value=0}
+  | Ty.PATH (_, s) ->
+    PathVal{error=1; size=s; addr=0}
+  | Ty.ARRAY inner_ty ->
+    let word = Sys.word_size / 8 in
+    let n = max 0 ((size - 3) / word) in
+    let data = Array.init n (fun _ -> dummy_of_size (Ty.base inner_ty) word) in
+    ArrayVal{error=1; length=0; data}
+  | Ty.PAIR (a_ty, b_ty) ->
+    let word = Sys.word_size / 8 in
+    let a = dummy_of_size (Ty.base a_ty) word in
+    let b = dummy_of_size (Ty.base b_ty) (size - 3 - word) in
+    PairVal{error=1; data=(a, b)}
+  | _ ->
+    let data = Array.make (max 0 (size - 3)) '\x00' in
+    StringVal{error=1; length=0; data}
 
 let timed_safe_select_elem (timing: timing) (bit: int) (v1: value) (v2: value) : value =
   let wc = timing.select_s in
   let start = Unix.gettimeofday () in
   let result = if bit = 0 then v1 else v2 in
   let elapsed = Unix.gettimeofday () -. start in
-  Unix.sleepf (max 0.0 (wc -. elapsed));
+  let sleep = max 0.0 (wc -. elapsed) in
+  Unix.sleepf sleep;
+  timing.select_sleep := !(timing.select_sleep) +. sleep;
+  timing.select_wc := !(timing.select_wc) +. wc;
   if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_safe_select_elem: elapsed %f exceeded worst-case %f" elapsed wc);
   result
 
@@ -298,15 +271,100 @@ let safeSelect (timing: timing) (bit: int) (orig: value) (upd: value) =
 let timed_path_write (timing: timing) heap error addr size (block_ty: Ty.basetype) upd =
   if V.size upd > size then
     raise @@ InterpFatal (Printf.sprintf "timed_path_write: value size %d exceeds path size %d" (V.size upd) size);
-  let dummy = S.dummy_of_size block_ty size in
+  let dummy = dummy_of_size block_ty size in
   let to_write = safeSelect timing 1 dummy upd in
 
   let wc = timing.safewrite_s in
   let start = Unix.gettimeofday () in
   if (error != 1 && addr != dummy_pointer) then Heap.write heap addr to_write;
   let elapsed = Unix.gettimeofday () -. start in
-  Unix.sleepf (max 0.0 (wc -. elapsed));
+  let sleep = max 0.0 (wc -. elapsed) in
+  Unix.sleepf sleep;
+  timing.safewrite_sleep := !(timing.safewrite_sleep) +. sleep;
+  timing.safewrite_wc := !(timing.safewrite_wc) +. wc;
   if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_path_write: elapsed %f exceeded worst-case %f" elapsed wc)
+
+let timed_path_read (timing: timing) heap error addr (block_ty: Ty.basetype) size =
+  let wc = timing.deref_s in
+  let safe_addr = ((error lxor 1) * addr) lor (error * dummy_pointer) in
+  let dummy = dummy_of_size block_ty size in
+  let start = Unix.gettimeofday () in
+  let heap_result =
+    match Heap.read heap safe_addr with
+    | v -> v
+    | exception Heap.HeapError _ -> dummy
+  in
+  let result = set_error heap_result error in
+  let elapsed = Unix.gettimeofday () -. start in
+  let sleep = max 0.0 (wc -. elapsed) in
+  Unix.sleepf sleep;
+  timing.deref_sleep := !(timing.deref_sleep) +. sleep;
+  timing.deref_wc := !(timing.deref_wc) +. wc;
+  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_path_read: elapsed %f exceeded worst-case %f" elapsed wc);
+  result
+
+let timed_array_read (timing: timing) (data: value array) (error: int) (length: int) (idx: int) (dummy: value) : value =
+  let in_bounds = Bool.to_int (idx >= 0) land Bool.to_int (idx < length) land Bool.to_int (error = 0) in
+  let result = ref dummy in
+  for i = 0 to Array.length data - 1 do
+    let select = Bool.to_int (i = idx) land in_bounds in
+    result := safeSelect timing select !result data.(i)
+  done;
+  !result
+
+  (* old sleep-based implementation:
+  let wc = timing.index_s in
+  let start = Unix.gettimeofday () in
+  let in_bounds = Bool.to_int (idx >= 0) land Bool.to_int (idx < length) land Bool.to_int (error = 0) in
+  let result = if in_bounds = 1 then data.(idx) else dummy in
+  let elapsed = Unix.gettimeofday () -. start in
+  let sleep = max 0.0 (wc -. elapsed) in
+  Unix.sleepf sleep;
+  timing.index_sleep := !(timing.index_sleep) +. sleep;
+  timing.index_wc := !(timing.index_wc) +. wc;
+  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_array_read: elapsed %f exceeded worst-case %f" elapsed wc);
+  result *)
+
+let timed_array_write (timing: timing) (data: value array) (error: int) (length: int) (idx: int) (upd: value) : unit =
+  let in_bounds = Bool.to_int (idx >= 0) land Bool.to_int (idx < length) land Bool.to_int (error = 0) in
+  for i = 0 to Array.length data - 1 do
+    let select = Bool.to_int (i = idx) land in_bounds in
+    data.(i) <- safeSelect timing select data.(i) upd
+  done
+
+  (* old sleep-based implementation:
+  let wc = timing.index_s in
+  let start = Unix.gettimeofday () in
+  if (idx < length && idx >= 0 && error = 0) then data.(idx) <- upd;
+  let elapsed = Unix.gettimeofday () -. start in
+  let sleep = max 0.0 (wc -. elapsed) in
+  Unix.sleepf sleep;
+  timing.index_sleep := !(timing.index_sleep) +. sleep;
+  timing.index_wc := !(timing.index_wc) +. wc;
+  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_array_write: elapsed %f exceeded worst-case %f" elapsed wc) *)
+
+let timed_map_read (timing: timing) (map: (int, value) H.t) (key: int) (dummy: value) : value =
+  let wc = timing.map_s in
+  let start = Unix.gettimeofday () in
+  let result = match H.find_opt map key with Some v -> v | None -> dummy in
+  let elapsed = Unix.gettimeofday () -. start in
+  let sleep = max 0.0 (wc -. elapsed) in
+  Unix.sleepf sleep;
+  timing.map_sleep := !(timing.map_sleep) +. sleep;
+  timing.map_wc := !(timing.map_wc) +. wc;
+  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_map_read: elapsed %f exceeded worst-case %f" elapsed wc);
+  result
+
+let timed_map_write (timing: timing) (map: (int, value) H.t) (key: int) (upd: value) : unit =
+  let wc = timing.map_s in
+  let start = Unix.gettimeofday () in
+  H.replace map key upd;
+  let elapsed = Unix.gettimeofday () -. start in
+  let sleep = max 0.0 (wc -. elapsed) in
+  Unix.sleepf sleep;
+  timing.map_sleep := !(timing.map_sleep) +. sleep;
+  timing.map_wc := !(timing.map_wc) +. wc;
+  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_map_write: elapsed %f exceeded worst-case %f" elapsed wc)
 
 let safeConcatArr (arr1: value) (arr2: value) =
   (* TODO Check if sub is oblivious here *)
@@ -404,7 +462,7 @@ let time_op (f: unit -> unit) : float =
   f ();
   Unix.gettimeofday () -. start
 
-let calibrate ?(iterations=1000) ?(multiplier=2.0) (): timing =
+let calibrate iterations multiplier: timing =
   let max_of iters f =
     let m = ref 0.0 in
     for _ = 1 to iters do
@@ -467,7 +525,13 @@ let calibrate ?(iterations=1000) ?(multiplier=2.0) (): timing =
   Printf.printf "  worst_case_safewrite_s= %f\n" safewrite_s;
   Printf.printf "  worst_case_map_s      = %f\n" map_s;
   Printf.printf "  worst_case_select_s   = %f\n" select_s; *)
-  {index_s; deref_s; map_s; safewrite_s; select_s} 
+  { index_s; deref_s; map_s; safewrite_s; select_s
+  ; index_sleep    = ref 0.0; index_wc    = ref 0.0
+  ; deref_sleep    = ref 0.0; deref_wc    = ref 0.0
+  ; map_sleep      = ref 0.0; map_wc      = ref 0.0
+  ; safewrite_sleep= ref 0.0; safewrite_wc= ref 0.0
+  ; select_sleep   = ref 0.0; select_wc   = ref 0.0
+  ; calib_s = 0.0; prog_start = 0.0 }
 
 
 
@@ -493,7 +557,7 @@ let rec readvar ctxt =
               then raise @@ InterpFatal "readVar: out of bounds public read"
               else unwrap_indices idx_tl data.(idx) elem_ty
           else begin
-            let dummy = S.dummy_of_size (Ty.base elem_ty) 0 in
+            let dummy = dummy_of_size (Ty.base elem_ty) 0 in
             let result = unwrap_indices idx_tl (timed_array_read ctxt.timing data error length idx dummy) elem_ty in
             set_error result (V.get_error result lor error)
           end
@@ -519,7 +583,7 @@ let rec readvar ctxt =
         if (L.flows_to key_lvl L.bottom && L.flows_to map_lvl L.bottom) || ctxt.unsafe then
           H.find map key_int
         else
-          timed_map_read ctxt.timing map key_int (S.dummy_of_size (Ty.base ty) 0)
+          timed_map_read ctxt.timing map key_int (dummy_of_size (Ty.base ty) 0)
       | _ -> raise @@ InterpFatal "MapVar: not a map"
       end
     | A.HeapVar {var} ->
@@ -529,7 +593,7 @@ let rec readvar ctxt =
         if (error = 1) then raise @@ InterpFatal "HeapVar: public pointer is error";
         Heap.read ctxt.heap addr
       | PathVal{error; addr; size} ->
-        timed_deref ctxt.timing ctxt.heap error addr (Ty.base ty) size
+        timed_path_read ctxt.timing ctxt.heap error addr (Ty.base ty) size
       | _ -> raise @@ InterpFatal "HeapVar: not a pointer or path"
       end
 in _V []
@@ -564,7 +628,7 @@ and writevar ctxt updkind upd mode =
           else begin
             match updkind, ctxt.unsafe with
             | BIND, false ->
-              let dummy = S.dummy_of_size (Ty.base elem_ty) 0 in
+              let dummy = dummy_of_size (Ty.base elem_ty) 0 in
               let old_val = timed_array_read ctxt.timing data error length idx dummy in
               timed_array_write ctxt.timing data error length idx (safeSelect ctxt.timing mode old_val upd)
             | _ -> if mode = 1 then timed_array_write ctxt.timing data error length idx upd
@@ -584,7 +648,7 @@ and writevar ctxt updkind upd mode =
           else
             begin match tl with
             | [] ->
-              let dummy = S.dummy_of_size (Ty.base elem_ty) 0 in
+              let dummy = dummy_of_size (Ty.base elem_ty) 0 in
               begin match updkind, ctxt.unsafe with
               | BIND, false ->
                 let old_val = timed_array_read ctxt.timing data error length idx dummy in
@@ -613,7 +677,7 @@ and writevar ctxt updkind upd mode =
       begin match map_val with
       | HMapVal{data=map;_} ->
         let key_int = _int key in
-        let dummy = S.dummy_of_size (Ty.base ty) 0 in
+        let dummy = dummy_of_size (Ty.base ty) 0 in
         if (L.flows_to key_lvl L.bottom && L.flows_to map_lvl L.bottom) || ctxt.unsafe then begin
           match updkind, ctxt.unsafe with
           | BIND, false -> raise @@ InterpFatal "Write MapVar: public bind?"
@@ -636,17 +700,12 @@ and writevar ctxt updkind upd mode =
         | BIND, false ->
           let old_val = Heap.read ctxt.heap addr in
           Heap.write ctxt.heap addr (safeSelect ctxt.timing mode old_val upd)
-        | _ ->
-          if mode = 1 then Heap.write ctxt.heap addr upd
+        | _ -> if mode = 1 then Heap.write ctxt.heap addr upd
         end
       | PathVal{error; addr; size} ->
         begin match updkind, ctxt.unsafe with
         | BIND, false ->
-          let safe_addr = ((error lxor 1) * addr) lor (error * dummy_pointer) in
-          let old_val = match Heap.read ctxt.heap safe_addr with
-            | v -> v
-            | exception Heap.HeapError _ -> S.dummy_of_size (Ty.base ty) size
-          in
+          let old_val = timed_path_read ctxt.timing ctxt.heap error addr (Ty.base ty) size in
           timed_path_write ctxt.timing ctxt.heap error addr size (Ty.base ty) (safeSelect ctxt.timing mode old_val upd)
         | _ -> if mode = 1 then timed_path_write ctxt.timing ctxt.heap error addr size (Ty.base ty) upd
         end
@@ -898,11 +957,25 @@ let rec prompt ctxt () =
 
 
 let interp ?(unsafe=false) print_when print_what (A.Prog{node;decls;hls}) =
-  let timing = calibrate ~iterations:100000 () in
+  let calib_start = Unix.gettimeofday () in
+  let _timing = calibrate 100000 2.0 in
+  let timing = { index_s = 0.00013; deref_s = 0.0006; map_s=0.00028; safewrite_s=0.000204; select_s=0.000206
+  ; index_sleep    = ref 0.0; index_wc    = ref 0.0
+  ; deref_sleep    = ref 0.0; deref_wc    = ref 0.0
+  ; map_sleep      = ref 0.0; map_wc      = ref 0.0
+  ; safewrite_sleep= ref 0.0; safewrite_wc= ref 0.0
+  ; select_sleep   = ref 0.0; select_wc   = ref 0.0
+  ; calib_s = 0.0; prog_start = 0.0 } in
+
+  let calib_s = Unix.gettimeofday () -. calib_start in
+  let timing = {timing with calib_s} in
 
   let inet_addr = Unix.inet_addr_of_string "127.0.0.1" in
   let sockaddr = Unix.ADDR_INET (inet_addr,3050) in
   let input,output = Unix.open_connection sockaddr in
+
+  let prog_start = calib_start in
+  let timing = {timing with prog_start} in
 
   let ctxt =
     { name = node
@@ -945,5 +1018,18 @@ let interp ?(unsafe=false) print_when print_what (A.Prog{node;decls;hls}) =
   try
     interp_loop ctxt ()
   with Exit ->
+    let t = ctxt.timing in
+    let prog_s = Unix.gettimeofday () -. t.prog_start in
+    let total_sleep = !(t.index_sleep) +. !(t.deref_sleep) +. !(t.map_sleep) +. !(t.safewrite_sleep) +. !(t.select_sleep) in
+    let total_wc    = !(t.index_wc)    +. !(t.deref_wc)    +. !(t.map_wc)    +. !(t.safewrite_wc)    +. !(t.select_wc) in
+    Printf.eprintf "calibration time: %fs\n" t.calib_s;
+    Printf.eprintf "program runtime:  %fs\n" prog_s;
+    Printf.eprintf "%-12s  %12s  %12s  %12s\n" "operation" "calib_s" "sleep_s" "wc_s";
+    Printf.eprintf "%-12s  %12f  %12f  %12f\n" "index"     t.index_s     !(t.index_sleep)     !(t.index_wc);
+    Printf.eprintf "%-12s  %12f  %12f  %12f\n" "deref"     t.deref_s     !(t.deref_sleep)     !(t.deref_wc);
+    Printf.eprintf "%-12s  %12f  %12f  %12f\n" "map"       t.map_s       !(t.map_sleep)       !(t.map_wc);
+    Printf.eprintf "%-12s  %12f  %12f  %12f\n" "safewrite" t.safewrite_s !(t.safewrite_sleep) !(t.safewrite_wc);
+    Printf.eprintf "%-12s  %12f  %12f  %12f\n" "select"    t.select_s    !(t.select_sleep)    !(t.select_wc);
+    Printf.eprintf "%-12s  %12s  %12f  %12f\n" "total"     ""            total_sleep          total_wc;
     Tr.terminate ctxt.trace
   

@@ -144,6 +144,16 @@ let rec checkAssignable ?self value dest err pos =
 
   | b1, b2 -> Err.error err pos @@ "cannot assign expression of type " ^ Ty.base_to_string b1 ^ " to variable of type " ^ Ty.base_to_string b2
 
+let checkNoRefPromotion (Exp{exp_base; ty=src_ty; _}) dest_ty err pos =
+  match exp_base with
+  | VarExp _ ->
+    (match T.base src_ty with
+     | T.ARRAY _ | T.HMAP _ ->
+       if not (L.flows_to (T.level dest_ty) (T.level src_ty))
+       then Err.error err pos @@ "cannot assign array/map variable to a higher security level: introduces aliasing"
+     | _ -> ())
+  | _ -> ()
+
 let checkLowPC pc err pos =
   if not (L.flows_to pc L.bottom)
   then Err.error err pos @@ "pc must be low"
@@ -377,12 +387,14 @@ let transCmd ({err;_} as ctxt) =
           checkLowPC pc err pos
       end;
       checkAssignable ~self:varty ety varty err pos;
+      checkNoRefPromotion e varty err pos;
       fromBase @@ AssignCmd{var;exp=e}, q
     | BindCmd {var;exp} ->
       let var,varty,varloc = v_ty_loc @@ transVar ctxt var in
       let e,ety = e_ty @@ transExp ctxt exp in
       checkWritable var varloc err pos;
       checkAssignable (raiseTo ety pc) varty err pos;
+      checkNoRefPromotion e varty err pos;
       fromBase @@ BindCmd{var;exp=e}, q
     | InputCmd {var;ch;size} ->
       let var,varty,varloc = v_ty_loc @@ transVar ctxt var in
@@ -460,6 +472,7 @@ let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
     let init,initty = e_ty @@ transExp ctxt init in
     H.add gamma x ty;
     checkAssignable ~self:ty initty ty err pos;
+    checkNoRefPromotion init ty err pos;
 
     let rec checkOramCompatibleTypes ?(strict=false) ty =
       let errmsg = "cannot use a variable size value as an array or path element" in
