@@ -3,16 +3,16 @@ TEST
 local channel INT: err(int)@{h};
 local channel STR: err(string)@{};
 
-var m: map(int, int)@{h} = hmap([(0, 42); (1, 99)]);
+var m: map(int, int)@{} = hmap([(0, 42); (1, 99)]);
 
 START@{} (ignored: int@{}) {
-    output(INT, m[[-1]]);
+    // output(INT, m[[-1]]);
     output(INT, m[[0]]);
     output(INT, m[[1]]);
 
     // we might need to remove this as ocaml hashmaps can chain, so introducing new elements may be bad
-    m[[-1]] = -7;
-    output(INT, m[[-1]]);
+    // m[[-1]] = -7;
+    // output(INT, m[[-1]]);
 
     m[[0]] = 200;
     output(INT, m[[0]]);

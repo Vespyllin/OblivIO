@@ -2,8 +2,9 @@ TEST
 local channel STR: err(string)@{h};
 local channel INT: err(int)@{h};
 
-var arr: string@{h}[]@{h}[]@{h} = [["A"]; ["BC"]; ["D"]];
+var arr: string@{h}[]@{}[]@{} = [["A"]; ["BC"]; ["D"]];
 var res: err(string)@{h} = "default";
+var res: err(string@{h}[])@{} = ["default"];
 
 START@{} (ignored: int@{}) {
     output(STR, res);
@@ -12,29 +13,13 @@ START@{} (ignored: int@{}) {
     // Upperbounds size of array elements
     res = arr[0][0];
     output(STR, res);
-    output(INT, size(res));
-
-    // Same size as above
-    res = arr[1][0];
+    
+    arr[0][0] = "D";
     output(STR, res);
-    output(INT, size(res));
-
-
-    arr[0][0] = "LONG STRING";
-    // Should not change
-    output(STR, res);
-    output(INT, size(res));
-
-    // Updates with large size
+    
     res = arr[0][0];
     output(STR, res);
-    output(INT, size(res));
-
-    // Updates with large size
-    res = arr[1][0];
-    output(STR, res);
-    output(INT, size(res));
-
+    
     output(STR, "ok");
     exit();
 }

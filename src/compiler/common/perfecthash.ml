@@ -28,7 +28,7 @@ let try_build (keys: Value.value array) m a =
 (* Max tries so as to not leak dataset through hashing *)
 let max_tries = 1024
 
-let build (arr: Value.value) : t =
+let build (arr: Value.value) : Value.value =
   let error, pairs = match arr with
     | Value.ArrayVal {error; data; _} -> error, data
     | _ -> failwith "perfecthash: expected ArrayVal"
@@ -63,17 +63,19 @@ let build (arr: Value.value) : t =
       let k = (error lxor 1) * value + error * Int.max_int in
       data.(hash a m k) <- Some v
     | _ -> ()) kvs;
-  TestMapVal { error; a; m; data }
+  Value.HMapVal { error; a; m; data }
 
-let lookup (TestMapVal {a; m; data; _}) = function
-  | Value.IntVal {error; value} ->
+let lookup map key =
+  match map, key with
+  | Value.HMapVal {a; m; data; _}, Value.IntVal {error; value} ->
     let k = (error lxor 1) * value + error * Int.max_int in
     data.(hash a m k)
-  | _ -> failwith "perfecthash: lookup key must be IntVal"
+  | _ -> failwith "perfecthash: lookup requires HMapVal and IntVal"
 
-let update (TestMapVal {a; m; data; _}) key v = match key with
-  | Value.IntVal {error; value} ->
+let update map key v =
+  match map, key with
+  | Value.HMapVal {a; m; data; _}, Value.IntVal {error; value} ->
     let k = (error lxor 1) * value + error * Int.max_int in
     let h = hash a m k in
     if data.(h) <> None then data.(h) <- Some v
-  | _ -> failwith "perfecthash: update key must be IntVal"
+  | _ -> failwith "perfecthash: update requires HMapVal and IntVal"

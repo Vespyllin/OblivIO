@@ -3,13 +3,17 @@ TEST
 local channel STR: string@{h};
 local channel INT: err(int)@{h};
 
-var priv_path256:   path(int@{h}[]@{h})[256]@{h}    = oalloc([256],256);
-var deref:          err(int@{h}[])@{h}              = array(1, 32);
-var deref2:         err(int@{h}[])@{h}              = [1];
+var a: int@{h} = 1;
+var c: int@{} = 3;
 
 
 START@{} (ignored: int@{}) { 
-    output(INT, deref[0]);
+    oblif a then
+        c ?= 10;
+    else
+        c ?= 20;
+
+    output(INT, c);
     output(STR, "ok");
     exit();
 }

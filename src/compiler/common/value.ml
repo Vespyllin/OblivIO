@@ -9,7 +9,7 @@ type value =
 | ArrayVal of {error: int; length: int; data: value array}
 | PointerVal of {error: int; addr: int}
 | PathVal of {error: int; size: int; addr: int}
-| HMapVal of {error: int; data: (int, value) H.t}
+| HMapVal of {error: int; a: int; m: int; data: value option array}
 
 let rec to_string = function
   | StringVal {error; length;data} ->
@@ -43,11 +43,11 @@ let rec to_string = function
 let rec size = function 
   | IntVal _                                    ->    8
   | StringVal{data;_}               ->    8 + Array.length data
-  | PairVal {data=(a,b);_}        ->    size a + size b 
-  | ArrayVal {data;  _}            ->    8 + (8*Array.length data)
+  | PairVal {data=(a,b);_}        ->    8 + size a + size b 
+  | ArrayVal {data; _}             ->    8 + Array.fold_left (fun acc v -> acc + size v) 0 data
   | PointerVal _                                ->    8
   | PathVal _                                   ->    8
-  | HMapVal _                                   ->    -1
+  | HMapVal {data; _}       ->    8 + 8 + 8 + Array.fold_left (fun acc -> function None -> 8 + acc | Some v -> 8 + acc + size v) 0 data
 
 
 let set_error (v: value) error : value =
@@ -58,7 +58,7 @@ let set_error (v: value) error : value =
   | StringVal {length; data; _} -> StringVal {error; length; data}
   | ArrayVal {length; data; _} -> ArrayVal {error; length; data}
   | PairVal{data;_} -> PairVal{error; data}
-  | HMapVal {data; _} -> HMapVal {error; data}
+  | HMapVal {a; m; data; _} -> HMapVal {error; a; m; data}
 
 let get_error = function
   | IntVal {error; _} -> error
