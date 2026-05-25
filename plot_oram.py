@@ -68,7 +68,7 @@ for ax, (key, title) in zip(axes, cases):
         ax.axhline(t_new, color="crimson", linestyle="--", linewidth=1.2, label="Timing pad")
 
     ax.set_title(title)
-    ax.set_xlabel("operations")
+    ax.set_xlabel("array size")
     ax.set_ylabel("exec time (s)")
     ax.legend(fontsize=8)
     ax.ticklabel_format(style="sci", axis="x", scilimits=(0, 0))

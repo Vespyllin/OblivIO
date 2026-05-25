@@ -76,7 +76,6 @@ for fname in sorted(os.listdir(results_dir)):
                 "op":          op,
                 "calib_s":     calib_s,
                 "exec_s":      exec_s,
-                "prog_s":      prog_s,
                 "total_sleep": total_sleep,
                 "total_wc":    total_wc,
                 "pad_pct":     pad_pct,

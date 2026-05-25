@@ -458,7 +458,7 @@ let calibrate iterations multiplier: timing =
   let data = Array.make arr_size dummy_int in
 
   let index_s =
-    let r = max_of iterations "index" (fun () ->
+    let r = max_of iterations "array_read" (fun () ->
       let idx = Random.int arr_size in
       let _ = if idx < arr_size then data.(idx) else dummy_int in
       ())
@@ -466,7 +466,7 @@ let calibrate iterations multiplier: timing =
   in
 
   let index_write_s =
-    let r = max_of iterations "index_write" (fun () ->
+    let r = max_of iterations "array_write" (fun () ->
       let idx = Random.int arr_size in
       data.(idx) <- IntVal{error=0; value=idx})
     in r *. multiplier
@@ -476,7 +476,7 @@ let calibrate iterations multiplier: timing =
   let addr = Heap.alloc heap dummy_int in
 
   let deref_s =
-    let r = max_of iterations "deref" (fun () ->
+    let r = max_of iterations "heap_read" (fun () ->
       let _ = match Heap.read heap addr with v -> v | exception Heap.HeapError _ -> dummy_int in
       ())
     in r *. multiplier
@@ -497,7 +497,7 @@ let calibrate iterations multiplier: timing =
   let map = PH.build map_kvs (Some dummy_int) in
 
   let map_s =
-    let r = max_of iterations "map" (fun () ->
+    let r = max_of iterations "map_read" (fun () ->
       let k = IntVal{error=0; value=Random.int arr_size} in
       let _ = PH.lookup map k in
       ())
@@ -511,9 +511,9 @@ let calibrate iterations multiplier: timing =
     in r *. multiplier
   in
 
-  (* let oc = open_out "calibration.csv" in
+  let oc = open_out "calibration.csv" in
   Buffer.output_buffer oc samples;
-  close_out oc; *)
+  close_out oc;
   { index_s; index_write_s; deref_s; map_s; map_write_s; heap_write_s
   ; index_sleep       = ref 0.0; index_wc       = ref 0.0
   ; index_write_sleep = ref 0.0; index_write_wc = ref 0.0
