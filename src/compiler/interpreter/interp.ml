@@ -24,15 +24,17 @@ type 'a sync_queue =
 
 type timing =
   { index_s: float
+  ; index_write_s: float
   ; deref_s: float
   ; map_s: float
-  ; safewrite_s: float
-  ; select_s: float
-  ; index_sleep: float ref;    index_wc: float ref
-  ; deref_sleep: float ref;    deref_wc: float ref
-  ; map_sleep: float ref;      map_wc: float ref
-  ; safewrite_sleep: float ref; safewrite_wc: float ref
-  ; select_sleep: float ref;   select_wc: float ref
+  ; map_write_s: float
+  ; heap_write_s: float
+  ; index_sleep: float ref;       index_wc: float ref
+  ; index_write_sleep: float ref; index_write_wc: float ref
+  ; deref_sleep: float ref;       deref_wc: float ref
+  ; map_sleep: float ref;         map_wc: float ref
+  ; map_write_sleep: float ref;   map_write_wc: float ref
+  ; heap_write_sleep: float ref;   heap_write_wc: float ref
   ; calib_s: float
   ; prog_start: float
   }
@@ -275,14 +277,14 @@ let timed_path_write (timing: timing) heap error addr size (block_ty: Ty.basetyp
   let dummy = dummy_of_size block_ty size in
   let to_write = safeSelect timing 1 dummy upd in
 
-  let wc = timing.safewrite_s in
+  let wc = timing.heap_write_s in
   let start = Unix.gettimeofday () in
   if (error != 1 && addr != dummy_pointer) then Heap.write heap addr to_write;
   let elapsed = Unix.gettimeofday () -. start in
   let sleep = max 0.0 (wc -. elapsed) in
   Unix.sleepf sleep;
-  timing.safewrite_sleep := !(timing.safewrite_sleep) +. sleep;
-  timing.safewrite_wc := !(timing.safewrite_wc) +. wc;
+  timing.heap_write_sleep := !(timing.heap_write_sleep) +. sleep;
+  timing.heap_write_wc := !(timing.heap_write_wc) +. wc;
   if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_path_write: elapsed %f exceeded worst-case %f" elapsed wc)
 
 let timed_path_read (timing: timing) heap error addr (block_ty: Ty.basetype) size =
@@ -305,20 +307,34 @@ let timed_path_read (timing: timing) heap error addr (block_ty: Ty.basetype) siz
   result
 
 let timed_array_read (timing: timing) (data: value array) (error: int) (length: int) (idx: int) (dummy: value) : value =
+  let wc = timing.index_s in
+
   let in_bounds = Bool.to_int (idx >= 0) land Bool.to_int (idx < length) land Bool.to_int (error = 0) in
-  let result = ref dummy in
-  for i = 0 to Array.length data - 1 do
-    let select = Bool.to_int (i = idx) land in_bounds in
-    result := safeSelect timing select !result data.(i)
-  done;
-  !result
+
+  let safe_idx = in_bounds * idx in
+  let start = Unix.gettimeofday () in
+  let result = if in_bounds = 1 then data.(safe_idx) else dummy in
+  let elapsed = Unix.gettimeofday () -. start in
+  let sleep = max 0.0 (wc -. elapsed) in
+
+  Unix.sleepf sleep;
+  timing.index_sleep := !(timing.index_sleep) +. sleep;
+  timing.index_wc := !(timing.index_wc) +. wc;
+  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_array_read: elapsed %f exceeded worst-case %f" elapsed wc);
+  set_error result error
 
 let timed_array_write (timing: timing) (data: value array) (error: int) (length: int) (idx: int) (upd: value) : unit =
+  let wc = timing.index_write_s in
   let in_bounds = Bool.to_int (idx >= 0) land Bool.to_int (idx < length) land Bool.to_int (error = 0) in
-  for i = 0 to Array.length data - 1 do
-    let select = Bool.to_int (i = idx) land in_bounds in
-    data.(i) <- safeSelect timing select data.(i) upd
-  done
+  let safe_idx = in_bounds * idx in
+  let start = Unix.gettimeofday () in
+  if in_bounds = 1 then data.(safe_idx) <- upd;
+  let elapsed = Unix.gettimeofday () -. start in
+  let sleep = max 0.0 (wc -. elapsed) in
+  Unix.sleepf sleep;
+  timing.index_write_sleep := !(timing.index_write_sleep) +. sleep;
+  timing.index_write_wc := !(timing.index_write_wc) +. wc;
+  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_array_write: elapsed %f exceeded worst-case %f" elapsed wc)
 
 let timed_map_read (timing: timing) (map: value) (key: value) (dummy: value) : value =
   let wc = timing.map_s in
@@ -333,14 +349,14 @@ let timed_map_read (timing: timing) (map: value) (key: value) (dummy: value) : v
   result
 
 let timed_map_write (timing: timing) (map: value) (key: value) (upd: value) : unit =
-  let wc = timing.map_s in
+  let wc = timing.map_write_s in
   let start = Unix.gettimeofday () in
   PH.update map key upd;
   let elapsed = Unix.gettimeofday () -. start in
   let sleep = max 0.0 (wc -. elapsed) in
   Unix.sleepf sleep;
-  timing.map_sleep := !(timing.map_sleep) +. sleep;
-  timing.map_wc := !(timing.map_wc) +. wc;
+  timing.map_write_sleep := !(timing.map_write_sleep) +. sleep;
+  timing.map_write_wc := !(timing.map_write_wc) +. wc;
   if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_map_write: elapsed %f exceeded worst-case %f" elapsed wc)
 
 let op (timing: timing) oper v1 v2 =
@@ -424,10 +440,14 @@ let time_op (f: unit -> unit) : float =
   Unix.gettimeofday () -. start
 
 let calibrate iterations multiplier: timing =
-  let max_of iters f =
+  let samples = Buffer.create (iterations * 5 * 20) in
+  Buffer.add_string samples "op,time_s\n";
+
+  let max_of iters label f =
     let m = ref 0.0 in
     for _ = 1 to iters do
       let t = time_op f in
+      Buffer.add_string samples (label ^ "," ^ string_of_float t ^ "\n");
       if t > !m then m := t
     done;
     !m
@@ -438,9 +458,16 @@ let calibrate iterations multiplier: timing =
   let data = Array.make arr_size dummy_int in
 
   let index_s =
-    let r = max_of iterations (fun () ->
+    let r = max_of iterations "index" (fun () ->
       let idx = Random.int arr_size in
       let _ = if idx < arr_size then data.(idx) else dummy_int in
+      ())
+    in r *. multiplier
+  in
+
+  let index_write_s =
+    let r = max_of iterations "index_write" (fun () ->
+      let idx = Random.int arr_size in
       data.(idx) <- IntVal{error=0; value=idx})
     in r *. multiplier
   in
@@ -449,49 +476,51 @@ let calibrate iterations multiplier: timing =
   let addr = Heap.alloc heap dummy_int in
 
   let deref_s =
-    let r = max_of iterations (fun () ->
+    let r = max_of iterations "deref" (fun () ->
       let _ = match Heap.read heap addr with v -> v | exception Heap.HeapError _ -> dummy_int in
       ())
     in r *. multiplier
   in
 
-  let safewrite_s =
-    let r = max_of iterations (fun () ->
+  let heap_write_s =
+    let r = max_of iterations "heap_write" (fun () ->
       Heap.write heap addr (IntVal{error=0;value=42}))
     in r *. multiplier
   in
 
-  let map = H.create 256 in
-  for i = 0 to arr_size - 1 do H.replace map i (IntVal{error=0;value=i}) done;
+  let map_kvs =
+    let pairs = Array.init arr_size (fun i ->
+      PairVal{error=0; data=(IntVal{error=0;value=i}, IntVal{error=0;value=i})})
+    in
+    ArrayVal{error=0; length=arr_size; data=pairs}
+  in
+  let map = PH.build map_kvs (Some dummy_int) in
 
   let map_s =
-    let r = max_of iterations (fun () ->
-      let k = Random.int arr_size in
-      let _ = match H.find_opt map k with Some v -> v | None -> dummy_int in
-      H.replace map k (IntVal{error=0;value=k}))
-    in r *. multiplier
-  in
-
-  let select_s =
-    let r = max_of iterations (fun () ->
-      let bit = Random.int 2 in
-      let _ = if bit = 0 then dummy_int else data.(0) in
+    let r = max_of iterations "map" (fun () ->
+      let k = IntVal{error=0; value=Random.int arr_size} in
+      let _ = PH.lookup map k in
       ())
     in r *. multiplier
   in
 
-  (* Printf.printf "calibration results (iterations=%d, multiplier=%.1f):\n" iterations multiplier;
-  Printf.printf "  worst_case_index_s    = %f\n" index_s;
-  Printf.printf "  worst_case_deref_s    = %f\n" deref_s;
-  Printf.printf "  worst_case_safewrite_s= %f\n" safewrite_s;
-  Printf.printf "  worst_case_map_s      = %f\n" map_s;
-  Printf.printf "  worst_case_select_s   = %f\n" select_s; *)
-  { index_s; deref_s; map_s; safewrite_s; select_s
-  ; index_sleep    = ref 0.0; index_wc    = ref 0.0
-  ; deref_sleep    = ref 0.0; deref_wc    = ref 0.0
-  ; map_sleep      = ref 0.0; map_wc      = ref 0.0
-  ; safewrite_sleep= ref 0.0; safewrite_wc= ref 0.0
-  ; select_sleep   = ref 0.0; select_wc   = ref 0.0
+  let map_write_s =
+    let r = max_of iterations "map_write" (fun () ->
+      let k = IntVal{error=0; value=Random.int arr_size} in
+      PH.update map k dummy_int)
+    in r *. multiplier
+  in
+
+  (* let oc = open_out "calibration.csv" in
+  Buffer.output_buffer oc samples;
+  close_out oc; *)
+  { index_s; index_write_s; deref_s; map_s; map_write_s; heap_write_s
+  ; index_sleep       = ref 0.0; index_wc       = ref 0.0
+  ; index_write_sleep = ref 0.0; index_write_wc = ref 0.0
+  ; deref_sleep       = ref 0.0; deref_wc       = ref 0.0
+  ; map_sleep         = ref 0.0; map_wc         = ref 0.0
+  ; map_write_sleep   = ref 0.0; map_write_wc   = ref 0.0
+  ; heap_write_sleep   = ref 0.0; heap_write_wc   = ref 0.0
   ; calib_s = 0.0; prog_start = 0.0 }
 
 
@@ -676,7 +705,7 @@ and writevar ctxt updkind upd mode =
 in _V []
 
 and eval ctxt =
-  let rec _E (A.Exp{exp_base;_}) =
+  let rec _E (A.Exp{exp_base;ty=outer_ty;_}) =
     match exp_base with
     | A.IntExp i -> IntVal{error=0;value=i}
     | A.StringExp s -> 
@@ -709,8 +738,16 @@ and eval ctxt =
       let data = arr |> List.map (fun e -> _E e) |> Array.of_list in
       ArrayVal {error=0;length;data}
     | A.HMapExp arr ->
+      let val_ty, lvl = match Ty.base outer_ty, Ty.level outer_ty with
+        | Ty.HMAP (_, vt), l -> vt, l
+        | _ -> raise @@ InterpFatal "HMapExp: expected hmap type"
+      in
+      let dummy =
+        if L.flows_to lvl L.bottom then None
+        else Some (dummy_of_size val_ty 0)
+      in
       let v = _E arr in
-      PH.build v
+      PH.build v dummy
     | A.NilExp -> 
       PointerVal{error=0;addr=dummy_pointer}
     | A.AllocExp e ->
@@ -908,14 +945,15 @@ let rec prompt ctxt () =
 
 let interp ?(unsafe=false) print_when print_what (A.Prog{node;decls;hls}) =
   let calib_start = Unix.gettimeofday () in
-  let _timing = calibrate 100000 2.0 in
-  let timing = { index_s = 0.00013; deref_s = 0.0006; map_s=0.00028; safewrite_s=0.000204; select_s=0.000206
-  ; index_sleep    = ref 0.0; index_wc    = ref 0.0
-  ; deref_sleep    = ref 0.0; deref_wc    = ref 0.0
-  ; map_sleep      = ref 0.0; map_wc      = ref 0.0
-  ; safewrite_sleep= ref 0.0; safewrite_wc= ref 0.0
-  ; select_sleep   = ref 0.0; select_wc   = ref 0.0
-  ; calib_s = 0.0; prog_start = 0.0 } in
+  let timing = calibrate 5000000 2.0 in
+  (* let timing = { index_s = 0.00013; index_write_s = 0.00013; deref_s = 0.0006; map_s=0.00028; map_write_s=0.00028; heap_write_s=0.000204
+  ; index_sleep       = ref 0.0; index_wc       = ref 0.0
+  ; index_write_sleep = ref 0.0; index_write_wc = ref 0.0
+  ; deref_sleep       = ref 0.0; deref_wc       = ref 0.0
+  ; map_sleep         = ref 0.0; map_wc         = ref 0.0
+  ; map_write_sleep   = ref 0.0; map_write_wc   = ref 0.0
+  ; heap_write_sleep   = ref 0.0; heap_write_wc   = ref 0.0 *)
+  (* ; calib_s = 0.0; prog_start = 0.0 } in *)
 
   let calib_s = Unix.gettimeofday () -. calib_start in
   let timing = {timing with calib_s} in
@@ -968,18 +1006,19 @@ let interp ?(unsafe=false) print_when print_what (A.Prog{node;decls;hls}) =
   try
     interp_loop ctxt ()
   with Exit ->
-    (* let t = ctxt.timing in
+    let t = ctxt.timing in
     let prog_s = Unix.gettimeofday () -. t.prog_start in
-    let total_sleep = !(t.index_sleep) +. !(t.deref_sleep) +. !(t.map_sleep) +. !(t.safewrite_sleep) +. !(t.select_sleep) in
-    let total_wc    = !(t.index_wc)    +. !(t.deref_wc)    +. !(t.map_wc)    +. !(t.safewrite_wc)    +. !(t.select_wc) in
+    let total_sleep = !(t.index_sleep) +. !(t.index_write_sleep) +. !(t.deref_sleep) +. !(t.map_sleep) +. !(t.map_write_sleep) +. !(t.heap_write_sleep) in
+    let total_wc    = !(t.index_wc)    +. !(t.index_write_wc)   +. !(t.deref_wc)    +. !(t.map_wc)    +. !(t.map_write_wc)   +. !(t.heap_write_wc) in
     Printf.eprintf "calibration time: %fs\n" t.calib_s;
     Printf.eprintf "program runtime:  %fs\n" prog_s;
     Printf.eprintf "%-12s  %12s  %12s  %12s\n" "operation" "calib_s" "sleep_s" "wc_s";
-    Printf.eprintf "%-12s  %12f  %12f  %12f\n" "index"     t.index_s     !(t.index_sleep)     !(t.index_wc);
-    Printf.eprintf "%-12s  %12f  %12f  %12f\n" "deref"     t.deref_s     !(t.deref_sleep)     !(t.deref_wc);
-    Printf.eprintf "%-12s  %12f  %12f  %12f\n" "map"       t.map_s       !(t.map_sleep)       !(t.map_wc);
-    Printf.eprintf "%-12s  %12f  %12f  %12f\n" "safewrite" t.safewrite_s !(t.safewrite_sleep) !(t.safewrite_wc);
-    Printf.eprintf "%-12s  %12f  %12f  %12f\n" "select"    t.select_s    !(t.select_sleep)    !(t.select_wc);
-    Printf.eprintf "%-12s  %12s  %12f  %12f\n" "total"     ""            total_sleep          total_wc; *)
+    Printf.eprintf "%-12s  %12f  %12f  %12f\n" "index"       t.index_s       !(t.index_sleep)       !(t.index_wc);
+    Printf.eprintf "%-12s  %12f  %12f  %12f\n" "index_write" t.index_write_s !(t.index_write_sleep) !(t.index_write_wc);
+    Printf.eprintf "%-12s  %12f  %12f  %12f\n" "deref"       t.deref_s       !(t.deref_sleep)       !(t.deref_wc);
+    Printf.eprintf "%-12s  %12f  %12f  %12f\n" "heap_write"  t.heap_write_s   !(t.heap_write_sleep) !(t.heap_write_wc);
+    Printf.eprintf "%-12s  %12f  %12f  %12f\n" "map"         t.map_s         !(t.map_sleep)         !(t.map_wc);
+    Printf.eprintf "%-12s  %12f  %12f  %12f\n" "map_write"   t.map_write_s   !(t.map_write_sleep)   !(t.map_write_wc);
+    Printf.eprintf "%-12s  %12s  %12f  %12f\n" "total"      ""               total_sleep          total_wc;
     Tr.terminate ctxt.trace
   

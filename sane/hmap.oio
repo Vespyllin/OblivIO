@@ -3,7 +3,7 @@ TEST
 local channel INT: err(int)@{h};
 local channel STR: err(string)@{};
 
-var m: map(int, int)@{} = hmap([(0, 42); (1, 99)]);
+var m: map(int, int)@{h} = hmap([(0, 42); (1, 99)]);
 
 START@{} (ignored: int@{}) {
     // output(INT, m[[-1]]);

@@ -28,7 +28,7 @@ let try_build (keys: Value.value array) m a =
 (* Max tries so as to not leak dataset through hashing *)
 let max_tries = 1024
 
-let build (arr: Value.value) : Value.value =
+let build (arr: Value.value) (dummy: Value.value option) : Value.value =
   let error, pairs = match arr with
     | Value.ArrayVal {error; data; _} -> error, data
     | _ -> failwith "perfecthash: expected ArrayVal"
@@ -54,10 +54,10 @@ let build (arr: Value.value) : Value.value =
     | Some a -> 0, a
     | None   -> 1, 1
   in
-  
+
   let error = error lor build_error in
 
-  let data = Array.make m None in
+  let data = Array.make m dummy in
   Array.iter (function
     | (Value.IntVal {error; value}, v) ->
       let k = (error lxor 1) * value + error * Int.max_int in
