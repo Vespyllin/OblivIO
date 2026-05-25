@@ -1,11 +1,12 @@
 STR> "map read priv"
 STR> "ok"
-calibration time: 0.029684s
-program runtime:  35.941148s
+calibration time: 5.414557s
+program runtime:  20.329524s
 operation          calib_s       sleep_s          wc_s
-index             0.000130      0.000000      0.000000
-deref             0.000300      0.000000      0.000000
-map               0.000280     27.994177     28.000000
-safewrite         0.000017      0.000000      0.000000
-select            0.000012      0.000000      0.000000
-total                          27.994177     28.000000
+index             0.000516      0.000000      0.000000
+index_write       0.000284      0.000000      0.000000
+deref             0.000230      0.000000      0.000000
+heap_write        0.000242      0.000968      0.000969
+map               0.000074      7.384304      7.390976
+map_write         0.000340      0.000000      0.000000
+total                           7.385272      7.391945

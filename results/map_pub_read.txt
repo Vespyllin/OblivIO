@@ -1,11 +1,12 @@
 STR> "map read pub"
 STR> "ok"
-calibration time: 0.031026s
-program runtime:  0.082503s
+calibration time: 5.494388s
+program runtime:  5.608379s
 operation          calib_s       sleep_s          wc_s
-index             0.000130      0.000000      0.000000
-deref             0.000300      0.000000      0.000000
-map               0.000280      0.000000      0.000000
-safewrite         0.000017      0.000000      0.000000
-select            0.000012      0.000000      0.000000
-total                           0.000000      0.000000
+index             0.000258      0.000000      0.000000
+index_write       0.000412      0.000000      0.000000
+deref             0.000352      0.000000      0.000000
+heap_write        0.000392      0.001568      0.001568
+map               0.000226      0.000000      0.000000
+map_write         0.000236      0.000000      0.000000
+total                           0.001568      0.001568

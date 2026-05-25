@@ -1,11 +1,12 @@
 STR> "array read priv"
 STR> "ok"
-calibration time: 0.030168s
-program runtime:  20.239338s
+calibration time: 5.499846s
+program runtime:  47.779598s
 operation          calib_s       sleep_s          wc_s
-index             0.000130     12.996703     13.000000
-deref             0.000300      0.000000      0.000000
-map               0.000280      0.000000      0.000000
-safewrite         0.000017      0.000000      0.000000
-select            0.000012      0.000000      0.000000
-total                          12.996703     13.000000
+index             0.000344     34.424141     34.427643
+index_write       0.000218      0.000000      0.000000
+deref             0.000466      0.000000      0.000000
+heap_write        0.000218      0.000871      0.000872
+map               0.000246      0.000000      0.000000
+map_write         0.000220      0.000000      0.000000
+total                          34.425012     34.428514

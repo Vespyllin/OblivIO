@@ -4,7 +4,7 @@ local channel STR: string@{h};
 local channel INT: err(int)@{h};
 
 var a: int@{h} = 1;
-var c: int@{} = 3;
+var c: int@{h} = 3;
 
 
 START@{} (ignored: int@{}) { 

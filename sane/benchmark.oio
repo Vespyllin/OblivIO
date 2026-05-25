@@ -3,7 +3,7 @@ TEST
 local channel STR: err(string)@{};
 
 // --- selectors: edit these to pick which test to run ---
-var test_struct: int@{} = 0;   // 0=array  1=path  2=map
+var test_struct: int@{} = 2;   // 0=array  1=path  2=map
 var test_op:     int@{} = 1;   // 0=read   1=write
 var test_level:  int@{} = 1;   // 0=pub    1=priv
 

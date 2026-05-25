@@ -1,0 +1,5 @@
+STR> "array read priv"
+STR> "ok"
+calibration time: 0.030228s
+program runtime:  19.708479s
+

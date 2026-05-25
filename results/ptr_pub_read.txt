@@ -1,11 +1,12 @@
 STR> "ptr read pub"
 STR> "ok"
-calibration time: 0.031022s
-program runtime:  0.071944s
+calibration time: 5.433112s
+program runtime:  5.548985s
 operation          calib_s       sleep_s          wc_s
-index             0.000130      0.000000      0.000000
-deref             0.000300      0.000000      0.000000
+index             0.000258      0.000000      0.000000
+index_write       0.000502      0.000000      0.000000
+deref             0.000244      0.000000      0.000000
+heap_write        0.000304      0.001217      0.001217
 map               0.000280      0.000000      0.000000
-safewrite         0.000017      0.000000      0.000000
-select            0.000012      0.000000      0.000000
-total                           0.000000      0.000000
+map_write         0.000270      0.000000      0.000000
+total                           0.001217      0.001217
