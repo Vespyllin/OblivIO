@@ -90,11 +90,11 @@ let safeDiv a b =
 
 let _int = function
   | IntVal {value;_} -> value
-  | _ -> raise @@ InterpFatal "_I"
+  | _ -> raise @@ InterpFatal "_int"
 
 let _string = function
   | StringVal{data;_} -> data |> Array.to_seq |> String.of_seq
-  | _ -> raise @@ InterpFatal "_I"
+  | _ -> raise @@ InterpFatal "_string"
 
 let rec dummy_of_size (ty: Ty.basetype) (size: int) : value =
   match ty with
@@ -115,7 +115,12 @@ let rec dummy_of_size (ty: Ty.basetype) (size: int) : value =
   | Ty.STRING ->
     let data = Array.make (max 0 (size - 3)) '\x00' in
     StringVal{error=1; length=0; data}
-  | _ -> raise @@ InterpFatal "_I"
+  | Ty.SELF r ->
+    begin match !r with
+    | Some ty -> dummy_of_size (Ty.base ty) size
+    | None -> raise @@ InterpFatal "generating dummy of empty self"
+    end
+  | _ -> raise @@ InterpFatal ("cannot generate dummy of type " ^ Ty.base_to_string ty)
 
 let safeConcat l (arr1 : char array) (arr2 : char array) =
   let l1 = Array.length arr1 in
@@ -294,12 +299,12 @@ let timed_path_read (timing: timing) heap error addr (block_ty: Ty.basetype) siz
   let safe_addr = ((error lxor 1) * addr) lor (error * dummy_pointer) in
   let dummy = dummy_of_size block_ty size in
   let start = Unix.gettimeofday () in
-  let heap_result =
+  let heap_result, read_error =
     match Heap.read heap safe_addr with
-    | v -> v
-    | exception Heap.HeapError _ -> dummy
+    | v -> v, 0
+    | exception Heap.HeapError _ -> dummy, 1
   in
-  let result = set_error heap_result error in
+  let result = set_error heap_result (error lor read_error) in
   let elapsed = Unix.gettimeofday () -. start in
   let sleep = max 0.0 (wc -. elapsed) in
   Unix.sleepf sleep;
@@ -728,8 +733,8 @@ and eval ctxt =
       let v = _E exp in
       begin
         match proj,v with
-        | A.Fst, PairVal{error; data=(a,_)} -> set_error a error
-        | A.Snd, PairVal{error; data=(_,b)} -> set_error b error
+        | A.Fst, PairVal{error; data=(a,_)} -> set_error a (error lor V.get_error a)
+        | A.Snd, PairVal{error; data=(_,b)} -> set_error b (error lor V.get_error b)
         | _ -> raise @@ InterpFatal __LOC__
       end
     | A.SizeExp exp ->
@@ -1025,7 +1030,7 @@ let interp ?(unsafe=false) print_when print_what (A.Prog{node;decls;hls}) =
   try
     interp_loop ctxt ()
   with Exit ->
-    let t = ctxt.timing in
+    (* let t = ctxt.timing in
     let prog_s = Unix.gettimeofday () -. t.prog_start in
     let total_sleep = !(t.index_sleep) +. !(t.index_write_sleep) +. !(t.deref_sleep) +. !(t.map_sleep) +. !(t.map_write_sleep) +. !(t.heap_write_sleep) in
     let total_wc    = !(t.index_wc)    +. !(t.index_write_wc)   +. !(t.deref_wc)    +. !(t.map_wc)    +. !(t.map_write_wc)   +. !(t.heap_write_wc) in
@@ -1038,6 +1043,6 @@ let interp ?(unsafe=false) print_when print_what (A.Prog{node;decls;hls}) =
     Printf.eprintf "%-12s  %12f  %12f  %12f\n" "heap_write"  t.heap_write_s   !(t.heap_write_sleep) !(t.heap_write_wc);
     Printf.eprintf "%-12s  %12f  %12f  %12f\n" "map"         t.map_s         !(t.map_sleep)         !(t.map_wc);
     Printf.eprintf "%-12s  %12f  %12f  %12f\n" "map_write"   t.map_write_s   !(t.map_write_sleep)   !(t.map_write_wc);
-    Printf.eprintf "%-12s  %12s  %12f  %12f\n" "total"      ""               total_sleep          total_wc;
+    Printf.eprintf "%-12s  %12s  %12f  %12f\n" "total"      ""               total_sleep          total_wc; *)
     Tr.terminate ctxt.trace
   

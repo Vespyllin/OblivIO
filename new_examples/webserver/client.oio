@@ -1,13 +1,13 @@
 CLIENT
 
-network channel SERVER/REQUEST@{} : (string@{H} * int@{H})@{H};
+network channel SERVER/REQUEST@{} : (int@{H} * string@{H})@{H};
 local channel STDOUT : string@{H};
 
-var url : string@{H} = "/about";
 var mq  : int@{H} = 1;
+var url : string@{H} = "/";
 
 START@{} (ignored : int@{}) {
-    send(SERVER/REQUEST, (url, mq));
+    send(SERVER/REQUEST, (mq, url));
 }
 
 RESPONSE@{} (page : string@{H}) {

@@ -1,6 +1,9 @@
 SERVER
 
 network channel CLIENT/RESPONSE@{} : string@{H};
+local channel STDOUT : string@{H};
+local channel STDINT : int@{H};
+
 
 var html_pages : map(string, path(string@{H})[64]@{H})@{H} = hmap([
     ("/",        oalloc("<html><body><h1>Home</h1></body></html>", 64));
@@ -30,10 +33,16 @@ var css_path     : err(path(string@{H})[64])@{H} = onil(64);
 REQUEST@{} (req : (int@{H} * string@{H})@{H}) {
     mq           = fst req;
     url          = snd req;
+
+    output(STDINT, mq);
+    output(STDOUT, url);
+
     html_path    = html_pages[[url]];
+
     css_arr_path = css_styles[[url]];
     css_arr      = *css_arr_path;
     css_path     = css_arr[mq];
+
     send(CLIENT/RESPONSE, (*html_path ?? "") ^ "<style>" ^ (*css_path ?? "") ^ "</style>");
     exit();
 }

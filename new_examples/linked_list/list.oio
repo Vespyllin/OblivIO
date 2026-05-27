@@ -1,0 +1,30 @@
+LIST
+
+local channel STDOUT : err(int)@{H};
+local channel STDSTR : string@{H};
+
+var head : err(path((_ * int@{H})@{H})[24])@{H} = onil(24);
+var val  : err(int)@{H} = 0;
+
+var i  : int@{} = 0;
+
+START@{} (ignored : int@{}) {
+    head = oalloc((onil(24), 3), 24);
+    head = oalloc((head, 2), 24);
+    head = oalloc((head, 1), 24);
+
+    while i < 5 do {
+        if i == 3 then {
+            output(STDSTR, "REACHED END");
+        } else skip;
+
+        val  = snd(*head);
+        output(STDOUT, val);
+        head = fst(*head);
+
+
+        i = i + 1;
+    }
+
+    exit();
+}

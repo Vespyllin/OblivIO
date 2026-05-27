@@ -107,10 +107,12 @@ let checkComparable t1 t2 err pos =
   in _check t1 t2
 
 let rec checkAssignable ?self value dest err pos =
-  checkFlowType value dest err pos;
-  if Ty.errable value && not (Ty.errable dest)
-  then Err.error err pos @@ "cannot assign errable value to non-errable destination";
-  
+  (match T.base dest with
+  | T.SELF _ -> ()
+  | _ ->
+    checkFlowType value dest err pos;
+    if Ty.errable value && not (Ty.errable dest)
+    then Err.error err pos @@ "cannot assign errable value to non-errable destination");
   match T.base value, T.base dest with
   | T.CRASH, _ -> ()
   | _, T.CRASH -> ()
