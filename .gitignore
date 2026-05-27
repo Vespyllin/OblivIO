@@ -8,6 +8,8 @@
 *.cmxs
 *.cmxa
 *.csv
+*.png
+results/
 
 # ocamlbuild working directory
 _build/
