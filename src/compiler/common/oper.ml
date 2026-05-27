@@ -1,6 +1,6 @@
-type oper 
-  = PlusOp | MinusOp | TimesOp
-  | EqOp | NeqOp | LtOp | LeOp | GtOp | GeOp 
+type oper
+  = PlusOp | MinusOp | TimesOp | DivOp
+  | EqOp | NeqOp | LtOp | LeOp | GtOp | GeOp
   | AndOp | OrOp
   | CaretOp | CoalesceOp
 
@@ -8,6 +8,7 @@ type oper
     | PlusOp -> "+"
     | MinusOp -> "-"
     | TimesOp -> "*"
+    | DivOp -> "/"
     | EqOp -> "="
     | NeqOp -> "<>"
     | LtOp -> "<"

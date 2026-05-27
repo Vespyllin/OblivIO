@@ -1,0 +1,15 @@
+CLIENT
+
+network channel SERVER/REQUEST@{} : string@{H};
+local channel STDOUT : string@{H};
+
+var url : string@{H} = "/about";
+
+START@{} (ignored : int@{}) {
+    send(SERVER/REQUEST, url);
+}
+
+RESPONSE@{} (page : string@{H}) {
+    output(STDOUT, page);
+    exit();
+}

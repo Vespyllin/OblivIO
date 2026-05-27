@@ -1,0 +1,29 @@
+SERVER
+
+network channel CLIENT/RESPONSE@{} : string@{H};
+
+var html_pages : map(string, ptr(string@{})@{})@{H} = hmap([
+    ("/",        alloc("<html><body><h1>Home</h1></body></html>"));
+    ("/about",   alloc("<html><body><h1>About</h1></body></html>"));
+    ("/contact", alloc("<html><body><h1>Contact</h1></body></html>"))
+]);
+
+var css_styles : map(string, ptr(string@{})@{})@{H} = hmap([
+    ("/",        alloc("body{font-family:sans-serif;color:black}"));
+    ("/about",   alloc("body{font-family:sans-serif;color:navy}"));
+    ("/contact", alloc("body{font-family:sans-serif;color:darkgreen}"))
+]);
+
+var html_ptr : ptr(string@{})@{H} = nil;
+var css_ptr  : ptr(string@{})@{H} = nil;
+var html     : string@{H} = "";
+var css      : string@{H} = "";
+
+REQUEST@{} (url : string@{H}) {
+    html_ptr ?= html_pages[[url]];
+    css_ptr  ?= css_styles[[url]];
+    html     ?= *html_ptr;
+    css      ?= *css_ptr;
+    send(CLIENT/RESPONSE, html ^ "<style>" ^ css ^ "</style>");
+    exit();
+}

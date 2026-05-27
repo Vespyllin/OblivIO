@@ -8,7 +8,7 @@ type basetype =
   | ARRAY of ty
   | POINTER of ty
   | PATH of ty * int
-  | HMAP of basetype * basetype
+  | HMAP of basetype * ty
   | ANY
   | SELF of ty option ref
   | CRASH 

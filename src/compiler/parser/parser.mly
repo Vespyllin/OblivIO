@@ -14,7 +14,7 @@
 %token LPAREN RPAREN LBRACE RBRACE LBRACK RBRACK
 %token PLUS MINUS TIMES DIVIDE EQ NEQ LT LE GT GE CARET
 %token FST SND DOLLAR
-%token COLON SIZE AT EXIT 
+%token COLON SIZE ISERROR LENGTH AT EXIT
 %token AND OR ASSIGN BIND IF THEN ELSE WHILE DO
 %token SKIP OBLIF SEND INPUT OUTPUT
 %token INTTYPE STRINGTYPE
@@ -28,7 +28,7 @@
 %nonassoc EQ NEQ GT LT GE LE
 %left CARET
 %left PLUS MINUS
-%left TIMES
+%left TIMES DIVIDE
 %right FST SND
 %nonassoc UMINUS
 
@@ -46,6 +46,7 @@
 | PLUS      { PlusOp }
 | MINUS     { MinusOp }
 | TIMES     { TimesOp }
+| DIVIDE    { DivOp }
 | AND       { AndOp }
 | OR        { OrOp }
 | EQ        { EqOp }
@@ -84,7 +85,9 @@ exp_base:
 | s=STRING          { StringExp s }
 | NIL               { NilExp }
 | v=var             { VarExp v }
-| SIZE e=paren(exp) { SizeExp e }
+| SIZE e=paren(exp)    { SizeExp e }
+| ISERROR e=paren(exp) { IsErrorExp e }
+| LENGTH e=paren(exp)  { LengthExp e }
 | e=binop_exp       { e }
 | FST exp=exp       { ProjExp {proj=Fst; exp} }
 | SND exp=exp       { ProjExp {proj=Snd; exp} }
@@ -158,7 +161,7 @@ basetype:
   { T.POINTER t }
 | PATHTYPE LPAREN t=type_at_lvl RPAREN LBRACK s=INT RBRACK
   { T.PATH (t, s) }
-| HMAPTYPE LPAREN k=basetype COMMA v=basetype RPAREN
+| HMAPTYPE LPAREN k=basetype COMMA v=type_at_lvl RPAREN
   { T.HMAP (k,v) }
 
 %inline type_at_lvl:

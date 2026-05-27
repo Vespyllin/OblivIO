@@ -51,6 +51,8 @@ rule token = parse
 | "network"           { NETWORK }
 | "channel"           { CHANNEL }
 | "size"              { SIZE }
+| "isError"           { ISERROR }
+| "length"            { LENGTH }
 | "oblif"             { OBLIF }
 | "if"                { IF }
 | "then"              { THEN }

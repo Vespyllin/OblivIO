@@ -140,7 +140,7 @@ let rec checkAssignable ?self value dest err pos =
     checkAssignable ?self t_value t_dest err pos
   | T.HMAP (t_k, t_v), T.HMAP (d_k, d_v) ->
     checkAssignable ?self (T.Type{base=t_k;errable=false;level=L.bottom}) (T.Type{base=d_k;errable=false;level=L.bottom}) err pos;
-    checkAssignable ?self (T.Type{base=t_v;errable=false;level=L.bottom}) (T.Type{base=d_v;errable=false;level=L.bottom}) err pos
+    checkAssignable ?self t_v d_v err pos
 
   | b1, b2 -> Err.error err pos @@ "cannot assign expression of type " ^ Ty.base_to_string b1 ^ " to variable of type " ^ Ty.base_to_string b2
 
@@ -181,6 +181,12 @@ let rec transExp ({err;_} as ctxt) =
     | SizeExp e ->
       let e = trexp e in
       SizeExp e ^! _bot Ty.INT
+    | IsErrorExp e ->
+      let e, _, lvl = e_ty_lvl @@ trexp e in
+      IsErrorExp e ^! Ty.Type{base=Ty.INT; errable=false; level=lvl}
+    | LengthExp e ->
+      let e = trexp e in
+      LengthExp e ^! _bot Ty.INT
     | OpExp {left;oper;right} ->
       let (left,lty) = e_ty @@ trexp left in
       let (right,rty) = e_ty @@ trexp right in
@@ -204,6 +210,10 @@ let rec transExp ({err;_} as ctxt) =
           checkInt lty err pos;
           checkInt rty err pos;
           Ty.INT, (Ty.errable lty || Ty.errable rty)
+        | DivOp ->
+          checkInt lty err pos;
+          checkInt rty err pos;
+          Ty.INT, true
         | EqOp | NeqOp ->
           checkComparable lty rty err pos;
           Ty.INT, (Ty.errable lty || Ty.errable rty)
@@ -275,7 +285,7 @@ let rec transExp ({err;_} as ctxt) =
       let arr_ty = T.Type{base=T.ARRAY ty;errable=false;level=L.bottom} in
       let arr_exp = ArrayExp elems ^! arr_ty in
       let base = match T.base ty with
-        | T.PAIR (kt, vt) -> T.HMAP (T.base kt, T.base vt)
+        | T.PAIR (kt, vt) -> T.HMAP (T.base kt, vt)
         | _ -> raise @@ NotImplemented "HMapExp: expected pair type" in
       HMapExp arr_exp ^! T.Type{base;errable=false;level=L.bottom}
 
@@ -321,11 +331,9 @@ and transVar ({err;_} as ctxt) =
       let exp, ety, elvl = e_ty_lvl @@ transExp ctxt exp in
       let cty = match T.base vty with
         | T.HMAP (kt, vt) ->
-          let fst_ty = T.Type{base=kt;errable=false;level=L.bottom} in
-          let snd_ty = T.Type{base=vt;errable=false;level=L.bottom} in
+          let fst_ty = T.Type{base=kt;errable=false;level=vlvl} in
           checkAssignable ety fst_ty err pos;
-          let res_type = snd_ty in
-          raiseTo res_type (L.lub vlvl elvl)
+          raiseTo vt (L.lub vlvl elvl)
         | _ -> errTy err pos @@ "variable is not a map type: " ^ T.to_string vty in
       begin
       match loc with
@@ -493,6 +501,7 @@ let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
           if strict
           then checkOramCompatibleTypes ~strict:true b
           else checkOramCompatibleTypes ~strict:false b
+      | T.POINTER _ -> ()
       | T.SELF _ -> ()
       | _ -> Err.error err pos "datatype is not supported in ORAM"
     in
@@ -521,8 +530,8 @@ let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
         then checkOramCompatibleTypes ~strict:true content
         else checkPtrLevels content;
       | T.HMAP (_, vt) ->
-        let vty = T.Type{base=vt; errable=false; level=L.bottom} in
-        checkOramCompatibleTypes ~strict:true vty
+        if not @@ L.flows_to (T.level ty) L.bottom
+        then checkOramCompatibleTypes ~strict:true vt
       | _ -> ()
     in
     checkPtrLevels ty;

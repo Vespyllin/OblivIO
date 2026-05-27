@@ -95,6 +95,7 @@ let _int = function
 let _string = function
   | StringVal{data;_} -> data |> Array.to_seq |> String.of_seq
   | _ -> raise @@ InterpFatal "_I"
+
 let rec dummy_of_size (ty: Ty.basetype) (size: int) : value =
   match ty with
   | Ty.INT ->
@@ -111,9 +112,10 @@ let rec dummy_of_size (ty: Ty.basetype) (size: int) : value =
     let a = dummy_of_size (Ty.base a_ty) word in
     let b = dummy_of_size (Ty.base b_ty) (size - 3 - word) in
     PairVal{error=1; data=(a, b)}
-  | _ ->
+  | Ty.STRING ->
     let data = Array.make (max 0 (size - 3)) '\x00' in
     StringVal{error=1; length=0; data}
+  | _ -> raise @@ InterpFatal "_I"
 
 let safeConcat l (arr1 : char array) (arr2 : char array) =
   let l1 = Array.length arr1 in
@@ -392,6 +394,10 @@ let op (timing: timing) oper v1 v2 =
   | TimesOp, IntVal {error=e1; value=v1}, IntVal {error=e2; value=v2} ->
     IntVal {error=e1 lor e2; value=v1*v2}
   (* STRING *)
+  | DivOp, IntVal {error=e1; value=v1}, IntVal {error=e2; value=v2} ->
+    let b0 = Bool.to_int (v2 = 0) in
+    let divisor = (v2 * (b0 lxor 1)) lor b0 in
+    IntVal {error=e1 lor e2 lor b0; value=v1 / divisor}
   | CaretOp, StringVal {error=e1;length=l1;data=d1}, StringVal {error=e2;length=l2;data=d2} ->
     StringVal {error=e1 lor e2;length=l1+l2; data=safeConcat l1 d1 d2}
   | CoalesceOp, a, b ->
@@ -424,6 +430,10 @@ let op_unsafe oper v1 v2 =
     IntVal {error=e1 lor e2; value=v1-v2}
   | TimesOp, IntVal {error=e1; value=v1}, IntVal {error=e2; value=v2} ->
     IntVal {error=e1 lor e2; value=v1*v2}
+  | DivOp, IntVal {error=e1; value=v1}, IntVal {error=e2; value=v2} ->
+    let b0 = Bool.to_int (v2 = 0) in
+    let divisor = (v2 * (b0 lxor 1)) lor b0 in
+    IntVal {error=e1 lor e2 lor b0; value=v1 / divisor}
   (* STRING *)
   | CaretOp, StringVal {error=e1; length=l1; data=d1}, StringVal {error=e2; length=l2; data=d2} ->
     let d1' = Array.sub d1 0 l1 in
@@ -725,6 +735,15 @@ and eval ctxt =
     | A.SizeExp exp ->
       let v = _E exp in
       IntVal {error=0; value=V.size v}
+    | A.IsErrorExp exp ->
+      let v = _E exp in
+      IntVal {error=0; value=V.get_error v}
+    | A.LengthExp exp ->
+      let v = _E exp in
+      begin match v with
+      | ArrayVal{length;_} -> IntVal{error=0; value=length}
+      | _ -> raise @@ InterpFatal "LengthExp: expected array"
+      end
     | A.OpExp {left;oper;right} ->
       let v1 = _E left in
       let v2 = _E right in
@@ -739,7 +758,7 @@ and eval ctxt =
       ArrayVal {error=0;length;data}
     | A.HMapExp arr ->
       let val_ty, lvl = match Ty.base outer_ty, Ty.level outer_ty with
-        | Ty.HMAP (_, vt), l -> vt, l
+        | Ty.HMAP (_, vt), l -> Ty.base vt, l
         | _ -> raise @@ InterpFatal "HMapExp: expected hmap type"
       in
       let dummy =
@@ -945,15 +964,15 @@ let rec prompt ctxt () =
 
 let interp ?(unsafe=false) print_when print_what (A.Prog{node;decls;hls}) =
   let calib_start = Unix.gettimeofday () in
-  let timing = calibrate 5000000 2.0 in
-  (* let timing = { index_s = 0.00013; index_write_s = 0.00013; deref_s = 0.0006; map_s=0.00028; map_write_s=0.00028; heap_write_s=0.000204
+  (* let timing = calibrate 5000000 2.0 in *)
+  let timing = { index_s = 0.00013; index_write_s = 0.00013; deref_s = 0.0006; map_s=0.00028; map_write_s=0.00028; heap_write_s=0.000204
   ; index_sleep       = ref 0.0; index_wc       = ref 0.0
   ; index_write_sleep = ref 0.0; index_write_wc = ref 0.0
   ; deref_sleep       = ref 0.0; deref_wc       = ref 0.0
   ; map_sleep         = ref 0.0; map_wc         = ref 0.0
   ; map_write_sleep   = ref 0.0; map_write_wc   = ref 0.0
-  ; heap_write_sleep   = ref 0.0; heap_write_wc   = ref 0.0 *)
-  (* ; calib_s = 0.0; prog_start = 0.0 } in *)
+  ; heap_write_sleep   = ref 0.0; heap_write_wc   = ref 0.0
+  ; calib_s = 0.0; prog_start = 0.0 } in
 
   let calib_s = Unix.gettimeofday () -. calib_start in
   let timing = {timing with calib_s} in

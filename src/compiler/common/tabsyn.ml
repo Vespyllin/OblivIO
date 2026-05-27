@@ -33,6 +33,8 @@ and exp_base
   | VarExp of var
   | ProjExp of {proj: proj; exp: exp}
   | SizeExp of exp
+  | IsErrorExp of exp
+  | LengthExp of exp
   | OpExp of { left: exp; oper: oper; right: exp }
   | PairExp of (exp*exp)
   | ArrayExp of exp list
