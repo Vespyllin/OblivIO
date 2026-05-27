@@ -2,28 +2,38 @@ SERVER
 
 network channel CLIENT/RESPONSE@{} : string@{H};
 
-var html_pages : map(string, ptr(string@{})@{})@{H} = hmap([
-    ("/",        alloc("<html><body><h1>Home</h1></body></html>"));
-    ("/about",   alloc("<html><body><h1>About</h1></body></html>"));
-    ("/contact", alloc("<html><body><h1>Contact</h1></body></html>"))
+var html_pages : map(string, path(string@{H})[64]@{H})@{H} = hmap([
+    ("/",        oalloc("<html><body><h1>Home</h1></body></html>", 64));
+    ("/about",   oalloc("<html><body><h1>About</h1></body></html>", 64));
+    ("/contact", oalloc("<html><body><h1>Contact</h1></body></html>", 64))
 ]);
 
-var css_styles : map(string, ptr(string@{})@{})@{H} = hmap([
-    ("/",        alloc("body{font-family:sans-serif;color:black}"));
-    ("/about",   alloc("body{font-family:sans-serif;color:navy}"));
-    ("/contact", alloc("body{font-family:sans-serif;color:darkgreen}"))
+var css_styles : map(string, path(path(string@{H})[64]@{H}[]@{H})[40]@{H})@{H} = hmap([
+    ("/",        oalloc([oalloc("body{color:black;font-size:12px}", 64);
+                         oalloc("body{color:black;font-size:16px}", 64);
+                         oalloc("body{color:black;font-size:20px}", 64)], 40));
+    ("/about",   oalloc([oalloc("body{color:navy;font-size:12px}", 64);
+                         oalloc("body{color:navy;font-size:16px}", 64);
+                         oalloc("body{color:navy;font-size:20px}", 64)], 40));
+    ("/contact", oalloc([oalloc("body{color:green;font-size:12px}", 64);
+                         oalloc("body{color:green;font-size:16px}", 64);
+                         oalloc("body{color:green;font-size:20px}", 64)], 40))
 ]);
 
-var html_ptr : ptr(string@{})@{H} = nil;
-var css_ptr  : ptr(string@{})@{H} = nil;
-var html     : string@{H} = "";
-var css      : string@{H} = "";
+var url          : string@{H} = "";
+var mq           : int@{H} = 0;
+var html_path    : path(string@{H})[64]@{H} = onil(64);
+var css_arr_path : path(path(string@{H})[64]@{H}[]@{H})[40]@{H} = onil(40);
+var css_arr      : err(path(string@{H})[64]@{H}[])@{H} = [onil(64)];
+var css_path     : err(path(string@{H})[64])@{H} = onil(64);
 
-REQUEST@{} (url : string@{H}) {
-    html_ptr ?= html_pages[[url]];
-    css_ptr  ?= css_styles[[url]];
-    html     ?= *html_ptr;
-    css      ?= *css_ptr;
-    send(CLIENT/RESPONSE, html ^ "<style>" ^ css ^ "</style>");
+REQUEST@{} (req : (int@{H} * string@{H})@{H}) {
+    mq           = fst req;
+    url          = snd req;
+    html_path    = html_pages[[url]];
+    css_arr_path = css_styles[[url]];
+    css_arr      = *css_arr_path;
+    css_path     = css_arr[mq];
+    send(CLIENT/RESPONSE, (*html_path ?? "") ^ "<style>" ^ (*css_path ?? "") ^ "</style>");
     exit();
 }

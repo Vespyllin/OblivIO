@@ -63,12 +63,22 @@ let rec isSameBase t1 t2 =
   match Ty.base t1, Ty.base t2 with
   | Ty.CRASH, _ -> true
   | _, Ty.CRASH -> true
+  | T.ANY, _ -> true
+  | _, T.ANY -> true
+  | T.SELF _, T.SELF _ -> true
   | T.INT, T.INT -> true
   | T.STRING, T.STRING -> true
   | T.PAIR (a1,a2), T.PAIR (b1,b2) ->
     isSameBase a1 b1 && isSameBase a2 b2
   | T.ARRAY t1, T.ARRAY t2 ->
     isSameBase t1 t2
+  | T.POINTER t1, T.POINTER t2 ->
+    isSameBase t1 t2
+  | T.PATH (t1, s1), T.PATH (t2, s2) ->
+    s1 = s2 && isSameBase t1 t2
+  | T.HMAP (k1, v1), T.HMAP (k2, v2) ->
+    isSameBase (T.Type{base=k1;errable=false;level=L.bottom}) (T.Type{base=k2;errable=false;level=L.bottom})
+    && isSameBase v1 v2
   | _ -> false
 
 let checkBaseType t1 t2 err pos =
@@ -472,6 +482,65 @@ let transCmd ({err;_} as ctxt) =
       fromBase ExitCmd, q
   in trcmd
 
+let rec checkTypeSize ?(strict=false) err pos ty =
+  let errmsg = "cannot use a variable size value inside an unsized mapped structure" in
+  match T.base ty with
+  | T.INT -> ()
+  | T.STRING ->
+    if strict then Err.error err pos errmsg
+  | T.PATH (block, _) ->
+    checkTypeSize err pos block
+  | T.ARRAY content ->
+    if strict then Err.error err pos errmsg
+    else checkTypeSize ~strict:true err pos content
+  | T.PAIR (a, b) ->
+    checkTypeSize ~strict:true err pos a;
+
+    if strict then checkTypeSize ~strict:true err pos b
+    else checkTypeSize ~strict:false err pos b
+  | T.POINTER _ -> ()
+  | T.SELF _ -> ()
+  | _ -> Err.error err pos "datatype is not supported in ORAM"
+
+let rec checkNestedType err pos ty =
+  match T.base ty with
+  | T.SELF _ -> ()
+  | T.POINTER cell ->
+    if not @@ L.flows_to (T.level ty) L.bottom
+    then Err.error err pos "pointer must be public";
+    checkNestedType err pos cell
+  | T.PATH (block, _) ->
+    if L.flows_to (T.level ty) L.bottom
+    then Err.error err pos "path cannot be public";
+    begin match T.base block with
+    | T.SELF _ -> ()
+    | _ ->
+      if not @@ L.flows_to (T.level ty) (T.level block)
+      then Err.error err pos "path cannot be more privileged than block";
+      checkNestedType err pos block
+    end;
+    checkTypeSize err pos ty
+  | T.ARRAY content ->
+    if not @@ L.flows_to (T.level ty) (T.level content)
+    then Err.error err pos "array cannot be more privileged than array content";
+
+    if not @@ L.flows_to (T.level ty) L.bottom
+    then checkTypeSize ~strict:true err pos content
+    else checkNestedType err pos content
+  | T.PAIR (a, b) ->
+ if not @@ L.flows_to (T.level ty) L.bottom
+    then begin
+      checkTypeSize ~strict:true err pos a;   (* a must be fixed *)
+      checkTypeSize ~strict:false err pos b   (* b may be variable *)
+    end else begin
+      checkNestedType err pos a;
+      checkNestedType err pos b
+    end
+  | T.HMAP (_, vt) ->
+    if not @@ L.flows_to (T.level ty) L.bottom
+    then checkTypeSize ~strict:true err pos vt
+  | _ -> ()
+
 let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
   match dec with
   | A.VarDecl {ty;x;init;pos} ->
@@ -481,60 +550,7 @@ let transDecl ({gamma;lambda;pi;err;_} as ctxt: context) dec =
     H.add gamma x ty;
     checkAssignable ~self:ty initty ty err pos;
     checkNoRefPromotion init ty err pos;
-
-    let rec checkOramCompatibleTypes ?(strict=false) ty =
-      let errmsg = "cannot use a variable size value as an array or path element" in
-      match T.base ty with
-      | T.INT -> ()
-      | T.STRING -> 
-        if strict 
-          then Err.error err pos errmsg
-          else ()
-      | T.PATH (block, _) ->
-        checkOramCompatibleTypes block
-      | T.ARRAY content -> 
-        if strict 
-          then Err.error err pos errmsg
-          else checkOramCompatibleTypes ~strict:true content
-      | T.PAIR (a, b) ->
-          checkOramCompatibleTypes ~strict:true a;
-          if strict
-          then checkOramCompatibleTypes ~strict:true b
-          else checkOramCompatibleTypes ~strict:false b
-      | T.POINTER _ -> ()
-      | T.SELF _ -> ()
-      | _ -> Err.error err pos "datatype is not supported in ORAM"
-    in
-    let rec checkPtrLevels ty =
-      match T.base ty with
-      | T.SELF _ -> ()
-      | T.POINTER cell ->
-        if not @@ L.flows_to (T.level ty) (T.level cell)
-        then Err.error err pos @@ "pointer cannot be more privileged than pointee";
-        checkPtrLevels cell
-      | T.PATH (block, _) ->
-        if L.flows_to (T.level ty) L.bottom
-        then Err.error err pos @@ "path cannot be public";
-        begin match T.base block with
-        | T.SELF _ -> ()
-        | _ ->
-          if not @@ L.flows_to (T.level ty) (T.level block) 
-          then Err.error err pos @@ "path cannot be more privileged than block";
-          checkPtrLevels block;
-        end;
-        checkOramCompatibleTypes ty;
-      | T.ARRAY content ->
-        if not @@ L.flows_to (T.level ty) (T.level content)
-        then Err.error err pos @@ "array cannot be more privileged than array content";
-        if not @@ L.flows_to (T.level ty) L.bottom
-        then checkOramCompatibleTypes ~strict:true content
-        else checkPtrLevels content;
-      | T.HMAP (_, vt) ->
-        if not @@ L.flows_to (T.level ty) L.bottom
-        then checkOramCompatibleTypes ~strict:true vt
-      | _ -> ()
-    in
-    checkPtrLevels ty;
+    checkNestedType err pos ty;
     VarDecl{x;ty;init;pos}
   | A.NetworkChannelDecl {channel;level;potential;ty;pos} ->
     if H.mem lambda channel
@@ -560,6 +576,8 @@ let transHl ctxt node (A.Hl{handler;level;potential;x;ty;body;pos}) =
 
   if handler = "START" && level <> L.bottom
   then Err.error ctxt.err pos @@ "START channel must be public";
+
+  checkNestedType ctxt.err pos ty;
 
   let (body,_) = transCmd ctxt level potential body in
 
