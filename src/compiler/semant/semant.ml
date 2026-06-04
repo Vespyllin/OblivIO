@@ -74,8 +74,8 @@ let rec isSameBase t1 t2 =
     isSameBase t1 t2
   | T.POINTER t1, T.POINTER t2 ->
     isSameBase t1 t2
-  | T.PATH (t1, s1), T.PATH (t2, s2) ->
-    s1 = s2 && isSameBase t1 t2
+  | T.SPOINTER (t1, s1), T.SPOINTER (t2, s2) ->
+    (s1 = s2 || T.base t1 = T.ANY || T.base t2 = T.ANY) && isSameBase t1 t2
   | T.HMAP (k1, v1), T.HMAP (k2, v2) ->
     isSameBase (T.Type{base=k1;errable=false;level=L.bottom}) (T.Type{base=k2;errable=false;level=L.bottom})
     && isSameBase v1 v2
@@ -147,8 +147,9 @@ let rec checkAssignable ?self value dest err pos =
     if not (T.base t_value = T.ANY) && not (L.flows_to (T.level t_value) (T.level t_dest) && L.flows_to (T.level t_dest) (T.level t_value))
       then Err.error err pos @@ "pointer cell levels must be equal: " ^L.to_string (T.level t_value) ^ " vs " ^ L.to_string (T.level t_dest);
     checkAssignable ?self t_value t_dest err pos
-  | T.PATH (t_value, s1), T.PATH (t_dest, s2) ->
-    if (s1 != s2) then Err.error err pos @@ "cannot assign paths of different sizes: " ^ string_of_int s1 ^ " to " ^ string_of_int s2;
+  | T.SPOINTER (t_value, s1), T.SPOINTER (t_dest, s2) ->
+    if s1 != s2 && T.base t_value <> T.ANY
+    then Err.error err pos @@ "cannot assign sized pointers of different sizes: " ^ string_of_int s1 ^ " to " ^ string_of_int s2;
     checkAssignable ?self t_value t_dest err pos
   | T.HMAP (t_k, t_v), T.HMAP (d_k, d_v) ->
     checkAssignable ?self (T.Type{base=t_k;errable=false;level=L.bottom}) (T.Type{base=d_k;errable=false;level=L.bottom}) err pos;
@@ -302,13 +303,13 @@ let rec transExp ({err;_} as ctxt) =
       HMapExp arr_exp ^! T.Type{base;errable=false;level=L.bottom}
 
     | NilExp -> NilExp ^! _bot (T.POINTER (T.Type{base=T.ANY;errable=false;level=L.bottom}))
-    | OnilExp size -> OnilExp size ^! _bot (T.PATH ((T.Type{base=T.ANY;errable=false;level=L.bottom}), size))
+    | OnilExp size -> OnilExp size ^! _bot (T.SPOINTER ((T.Type{base=T.ANY;errable=false;level=L.bottom}), size))
     | AllocExp p -> 
       let e, ty = e_ty @@ trexp p in
       AllocExp e ^! _bot (T.POINTER ty)
     | OramExp{value=p; size=s} -> 
       let e, ty = e_ty @@ trexp p in
-      OramExp{value=e; size=s} ^! Ty.Type{base=(T.PATH (ty, s));errable=false;level=L.bottom}
+      OramExp{value=e; size=s} ^! Ty.Type{base=(T.SPOINTER (ty, s));errable=false;level=L.bottom}
   in trexp
 
 and transVar ({err;_} as ctxt) =
@@ -360,7 +361,7 @@ and transVar ({err;_} as ctxt) =
           | T.SELF _ -> vty
           | _ -> t
           end
-        | T.PATH (t, _) ->
+        | T.SPOINTER (t, _) ->
           let inner = begin match T.base t with
           | T.SELF _ -> vty
           | _ -> t
@@ -490,7 +491,7 @@ let rec checkTypeSize ?(strict=false) err pos ty =
   | T.INT -> ()
   | T.STRING ->
     if strict then Err.error err pos errmsg
-  | T.PATH (block, _) ->
+  | T.SPOINTER (block, _) ->
     checkTypeSize err pos block
   | T.ARRAY content ->
     if strict then Err.error err pos errmsg
@@ -511,14 +512,16 @@ let rec checkNestedType err pos ty =
     if not @@ L.flows_to (T.level ty) L.bottom
     then Err.error err pos "pointer must be public";
     checkNestedType err pos cell
-  | T.PATH (block, _) ->
+  | T.SPOINTER (block, size) ->
     if L.flows_to (T.level ty) L.bottom
-    then Err.error err pos "path cannot be public";
+    then Err.error err pos "sized pointer cannot be public";
+    if size < 8
+    then Err.error err pos "sized pointer block size must be at least 8";
     begin match T.base block with
     | T.SELF _ -> ()
     | _ ->
       if not @@ L.flows_to (T.level ty) (T.level block)
-      then Err.error err pos "path cannot be more privileged than block";
+      then Err.error err pos "sized pointer cannot be more privileged than block";
       checkNestedType err pos block
     end;
     checkTypeSize err pos ty

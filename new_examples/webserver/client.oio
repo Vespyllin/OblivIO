@@ -4,9 +4,10 @@ network channel SERVER/REQUEST@{} : (int@{H} * string@{H})@{H};
 local channel STDOUT : string@{H};
 
 var mq  : int@{H} = 1;
-var url : string@{H} = "/";
+var url : string@{H} = "MAX_URL_LENGTH_STRING";
 
 START@{} (ignored : int@{}) {
+    url ?= "/";
     send(SERVER/REQUEST, (mq, url));
 }
 

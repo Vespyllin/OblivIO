@@ -100,20 +100,18 @@ let rec dummy_of_size (ty: Ty.basetype) (size: int) : value =
   match ty with
   | Ty.INT ->
     IntVal{error=1; value=0}
-  | Ty.PATH (_, s) ->
-    PathVal{error=1; size=s; addr=0}
+  | Ty.SPOINTER _ ->
+    SPointerVal{error=1; addr=0}
   | Ty.ARRAY inner_ty ->
-    let word = Sys.word_size / 8 in
-    let n = max 0 ((size - 3) / word) in
-    let data = Array.init n (fun _ -> dummy_of_size (Ty.base inner_ty) word) in
+    let n = max 0 ((size - 8) / 8) in
+    let data = Array.init n (fun _ -> dummy_of_size (Ty.base inner_ty) 8) in
     ArrayVal{error=1; length=0; data}
   | Ty.PAIR (a_ty, b_ty) ->
-    let word = Sys.word_size / 8 in
-    let a = dummy_of_size (Ty.base a_ty) word in
-    let b = dummy_of_size (Ty.base b_ty) (size - 3 - word) in
+    let a = dummy_of_size (Ty.base a_ty) 8 in
+    let b = dummy_of_size (Ty.base b_ty) (size - 16) in
     PairVal{error=1; data=(a, b)}
   | Ty.STRING ->
-    let data = Array.make (max 0 (size - 3)) '\x00' in
+    let data = Array.make (max 0 (size - 8)) '\x00' in
     StringVal{error=1; length=0; data}
   | Ty.SELF r ->
     begin match !r with
@@ -270,17 +268,16 @@ let safeSelect (_timing: timing) (bit: int) (orig: value) (upd: value) =
           | o1, o2 -> if bit = 0 then o1 else o2)
       done;
       HMapVal{error; a; m; data}
-    | PathVal{error=e1; size=s1; addr=v1}, PathVal{error=e2; size=s2; addr=v2} ->
+    | SPointerVal{error=e1; addr=v1}, SPointerVal{error=e2; addr=v2} ->
       let err = ((bit lxor 1) * e1) lor (bit * e2) in
-      let size = ((bit lxor 1) * s1) lor (bit * s2) in
       let addr = ((bit lxor 1) * v1) lor (bit * v2) in
-      PathVal{error=err; size; addr}
+      SPointerVal{error=err; addr}
     | _ -> raise @@ InterpFatal ("safeSelect: " ^ (V.to_string orig) ^  ", " ^ (V.to_string upd)) in
   _S orig upd
 
-let timed_path_write (timing: timing) heap error addr size (block_ty: Ty.basetype) upd =
+let timed_spointer_write (timing: timing) heap error addr size (block_ty: Ty.basetype) upd =
   if V.size upd > size then
-    raise @@ InterpFatal (Printf.sprintf "timed_path_write: value size %d exceeds path size %d" (V.size upd) size);
+    raise @@ InterpFatal (Printf.sprintf "timed_spointer_write: value size %d exceeds sized pointer size %d" (V.size upd) size);
   let dummy = dummy_of_size block_ty size in
   let to_write = safeSelect timing 1 dummy upd in
 
@@ -292,9 +289,9 @@ let timed_path_write (timing: timing) heap error addr size (block_ty: Ty.basetyp
   Unix.sleepf sleep;
   timing.heap_write_sleep := !(timing.heap_write_sleep) +. sleep;
   timing.heap_write_wc := !(timing.heap_write_wc) +. wc;
-  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_path_write: elapsed %f exceeded worst-case %f" elapsed wc)
+  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_spointer_write: elapsed %f exceeded worst-case %f" elapsed wc)
 
-let timed_path_read (timing: timing) heap error addr (block_ty: Ty.basetype) size =
+let timed_spointer_read (timing: timing) heap error addr (block_ty: Ty.basetype) size =
   let wc = timing.deref_s in
   let safe_addr = ((error lxor 1) * addr) lor (error * dummy_pointer) in
   let dummy = dummy_of_size block_ty size in
@@ -310,7 +307,7 @@ let timed_path_read (timing: timing) heap error addr (block_ty: Ty.basetype) siz
   Unix.sleepf sleep;
   timing.deref_sleep := !(timing.deref_sleep) +. sleep;
   timing.deref_wc := !(timing.deref_wc) +. wc;
-  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_path_read: elapsed %f exceeded worst-case %f" elapsed wc);
+  if elapsed > wc then raise @@ InterpFatal (Printf.sprintf "timed_spointer_read: elapsed %f exceeded worst-case %f" elapsed wc);
   result
 
 let timed_array_read (timing: timing) (data: value array) (error: int) (length: int) (idx: int) (dummy: value) : value =
@@ -593,13 +590,17 @@ let rec readvar ctxt =
       end
     | A.HeapVar {var} ->
       let ptr = _V access_path var in
+      let A.Var{ty=spointer_ty; _} = var in
+      let spointer_size = match Ty.base spointer_ty with
+        | Ty.SPOINTER (_, s) -> s
+        | _ -> raise @@ InterpFatal "HeapVar read: not a PATH type" in
       begin match ptr with
       | PointerVal{error; addr} ->
         if (error = 1) then raise @@ InterpFatal "HeapVar: public pointer is error";
         Heap.read ctxt.heap addr
-      | PathVal{error; addr; size} ->
-        timed_path_read ctxt.timing ctxt.heap error addr (Ty.base ty) size
-      | _ -> raise @@ InterpFatal "HeapVar: not a pointer or path"
+      | SPointerVal{error; addr; _} ->
+        timed_spointer_read ctxt.timing ctxt.heap error addr (Ty.base ty) spointer_size
+      | _ -> raise @@ InterpFatal "HeapVar: not a pointer or sized pointer"
       end
 in _V []
 
@@ -699,6 +700,10 @@ and writevar ctxt updkind upd mode =
       end
 
     | A.HeapVar {var} ->
+      let A.Var{ty=spointer_ty; _} = var in
+      let spointer_size = match Ty.base spointer_ty with
+        | Ty.SPOINTER (_, s) -> s
+        | _ -> raise @@ InterpFatal "HeapVar write: not a PATH type" in
       begin match readvar ctxt var with
       | PointerVal{error; addr} ->
         if (error = 1 || addr = 0) then raise @@ InterpFatal "writeVar: Heap - writing to err/nil";
@@ -708,12 +713,12 @@ and writevar ctxt updkind upd mode =
           Heap.write ctxt.heap addr (safeSelect ctxt.timing mode old_val upd)
         | _ -> if mode = 1 then Heap.write ctxt.heap addr upd
         end
-      | PathVal{error; addr; size} ->
+      | SPointerVal{error; addr; _} ->
         begin match updkind, ctxt.unsafe with
         | BIND, false ->
-          let old_val = timed_path_read ctxt.timing ctxt.heap error addr (Ty.base ty) size in
-          timed_path_write ctxt.timing ctxt.heap error addr size (Ty.base ty) (safeSelect ctxt.timing mode old_val upd)
-        | _ -> if mode = 1 then timed_path_write ctxt.timing ctxt.heap error addr size (Ty.base ty) upd
+          let old_val = timed_spointer_read ctxt.timing ctxt.heap error addr (Ty.base ty) spointer_size in
+          timed_spointer_write ctxt.timing ctxt.heap error addr spointer_size (Ty.base ty) (safeSelect ctxt.timing mode old_val upd)
+        | _ -> if mode = 1 then timed_spointer_write ctxt.timing ctxt.heap error addr spointer_size (Ty.base ty) upd
         end
       | _ -> raise @@ InterpFatal "HeapVar: not a pointer"
       end
@@ -778,14 +783,14 @@ and eval ctxt =
       let v = _E e in
       let addr = Heap.alloc ctxt.heap v in
       PointerVal{error=0;addr}
-    | A.OnilExp size ->
-      PathVal{error=0; size; addr=dummy_pointer}
+    | A.OnilExp _ ->
+      SPointerVal{error=0; addr=dummy_pointer}
     | A.OramExp{value=e; size=ptr_size} ->
       let A.Exp{ty=inner_ty;_} = e in
       let v = _E e in
       let addr = Heap.reserve ctxt.heap in
-      timed_path_write ctxt.timing ctxt.heap 0 addr ptr_size (Ty.base inner_ty) v;
-      PathVal{error=0; size=ptr_size; addr}
+      timed_spointer_write ctxt.timing ctxt.heap 0 addr ptr_size (Ty.base inner_ty) v;
+      SPointerVal{error=0; addr}
   in _E
 
 exception Exit

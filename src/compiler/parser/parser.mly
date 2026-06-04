@@ -18,7 +18,7 @@
 %token AND OR ASSIGN BIND IF THEN ELSE WHILE DO
 %token SKIP OBLIF SEND INPUT OUTPUT
 %token INTTYPE STRINGTYPE
-%token PTRTYPE ERRTYPE UNDERSCORE PATHTYPE HMAPTYPE
+%token PTRTYPE ERRTYPE UNDERSCORE HMAPTYPE
 %token ALLOC ORAM NIL ONIL ARRAY HMAP
 %token COALESCE
 
@@ -91,8 +91,8 @@ exp_base:
 | e=binop_exp       { e }
 | FST exp=exp       { ProjExp {proj=Fst; exp} }
 | SND exp=exp       { ProjExp {proj=Snd; exp} }
-| ONIL LPAREN i=INT RPAREN
-  { OnilExp i }
+| ONIL
+  { OnilExp 1 }
 | pair=paren(spair(exp,COMMA,exp))
   { PairExp pair }
 | arr=brack(slist(SEMICOLON,exp))
@@ -157,10 +157,10 @@ basetype:
   { T.PAIR (t1,t2) }
 | t=type_at_lvl LBRACK RBRACK
   { T.ARRAY t }
+| PTRTYPE LBRACK s=INT RBRACK LPAREN t=type_at_lvl RPAREN
+  { T.SPOINTER (t, s) }
 | PTRTYPE LPAREN t=type_at_lvl RPAREN
   { T.POINTER t }
-| PATHTYPE LPAREN t=type_at_lvl RPAREN LBRACK s=INT RBRACK
-  { T.PATH (t, s) }
 | HMAPTYPE LPAREN k=basetype COMMA v=type_at_lvl RPAREN
   { T.HMAP (k,v) }
 

@@ -1,19 +1,19 @@
 TEST
 
-local channel STR: string@{h};
-local channel INT: err(int)@{h};
+local channel STDOUT : err(int)@{H};
 
-var a: int@{h} = 1;
-var c: int@{h} = 3;
+var p   : ptr[64](string@{H})@{H} = onil;
+var q   : ptr[128](string@{H})@{H} = onil;
+var s   : err(string)@{H} = "";
+var t   : err(string)@{H} = "";
+var len : err(int)@{H} = 0;
 
-
-START@{} (ignored: int@{}) { 
-    oblif a then
-        c ?= 10;
-    else
-        c ?= 20;
-
-    output(INT, c);
-    output(STR, "ok");
+START@{} (ignored : int@{}) {
+    q = p;
+    s = *p;
+    t = *q;
+    
+    output(STDOUT, size(s));
+    output(STDOUT, size(t));
     exit();
 }

@@ -8,7 +8,7 @@ type value =
 | PairVal of {error: int; data: (value * value)}
 | ArrayVal of {error: int; length: int; data: value array}
 | PointerVal of {error: int; addr: int}
-| PathVal of {error: int; size: int; addr: int}
+| SPointerVal of {error: int; addr: int}
 | HMapVal of {error: int; a: int; m: int; data: value option array}
 
 let rec to_string = function
@@ -35,9 +35,9 @@ let rec to_string = function
   | PointerVal {error;addr} ->
       if error = 1 then "ErrPtr" else
       "ptr(" ^ string_of_int addr ^ ")" 
-  | PathVal {error;size;addr} ->
+  | SPointerVal {error;addr} ->
       if error = 1 then "ErrPtr" else
-      "path(" ^ string_of_int addr ^ ")[" ^ string_of_int size ^ "]"
+      "ptr(" ^ string_of_int addr ^ ")"
   | HMapVal _ -> "map"
 
 let rec size = function 
@@ -46,7 +46,7 @@ let rec size = function
   | PairVal {data=(a,b);_}        ->    8 + size a + size b 
   | ArrayVal {data; _}             ->    8 + Array.fold_left (fun acc v -> acc + size v) 0 data
   | PointerVal _                                ->    8
-  | PathVal _                                   ->    8
+  | SPointerVal _                                   ->    8
   | HMapVal {data; _}       ->    8 + 8 + 8 + Array.fold_left (fun acc -> function None -> 8 + acc | Some v -> 8 + acc + size v) 0 data
 
 
@@ -54,7 +54,7 @@ let set_error (v: value) error : value =
   match v with
   | IntVal {value; _} -> IntVal {error; value}
   | PointerVal {addr; _} -> PointerVal {error; addr}
-  | PathVal {size;addr; _} -> PathVal {error; size; addr}
+  | SPointerVal {addr; _} -> SPointerVal {error; addr}
   | StringVal {length; data; _} -> StringVal {error; length; data}
   | ArrayVal {length; data; _} -> ArrayVal {error; length; data}
   | PairVal{data;_} -> PairVal{error; data}
@@ -63,7 +63,7 @@ let set_error (v: value) error : value =
 let get_error = function
   | IntVal {error; _} -> error
   | PointerVal {error; _} -> error
-  | PathVal {error; _} -> error
+  | SPointerVal {error; _} -> error
   | StringVal {error; _} -> error
   | ArrayVal {error; _} -> error
   | PairVal{error;_} -> error

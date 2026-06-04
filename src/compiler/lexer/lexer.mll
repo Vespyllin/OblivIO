@@ -64,7 +64,6 @@ rule token = parse
 | "int"               { INTTYPE }
 | "string"            { STRINGTYPE }
 | "ptr"               { PTRTYPE }
-| "path"              { PATHTYPE }
 | "hmap"               { HMAP }
 | "map"               { HMAPTYPE }
 | "err"               { ERRTYPE }

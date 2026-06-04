@@ -3,13 +3,13 @@ LIST
 local channel STDOUT : err(int)@{H};
 local channel STDSTR : string@{H};
 
-var head : err(path((_ * int@{H})@{H})[24])@{H} = onil(24);
+var head : err(ptr[24]((_ * int@{H})@{H}))@{H} = onil;
 var val  : err(int)@{H} = 0;
 
 var i  : int@{} = 0;
 
 START@{} (ignored : int@{}) {
-    head = oalloc((onil(24), 3), 24);
+    head = oalloc((onil, 3), 24);
     head = oalloc((head, 2), 24);
     head = oalloc((head, 1), 24);
 
@@ -21,7 +21,6 @@ START@{} (ignored : int@{}) {
         val  = snd(*head);
         output(STDOUT, val);
         head = fst(*head);
-
 
         i = i + 1;
     }

@@ -5,30 +5,32 @@ local channel STDOUT : string@{H};
 local channel STDINT : int@{H};
 
 
-var html_pages : map(string, path(string@{H})[64]@{H})@{H} = hmap([
+var html_pages : map(string, ptr[64](string@{H})@{H})@{H} = hmap([
     ("/",        oalloc("<html><body><h1>Home</h1></body></html>", 64));
     ("/about",   oalloc("<html><body><h1>About</h1></body></html>", 64));
     ("/contact", oalloc("<html><body><h1>Contact</h1></body></html>", 64))
 ]);
 
-var css_styles : map(string, path(path(string@{H})[64]@{H}[]@{H})[40]@{H})@{H} = hmap([
+var css_styles : map(string, ptr[32](ptr[64](string@{H})@{H}[]@{H})@{H})@{H} = hmap([
     ("/",        oalloc([oalloc("body{color:black;font-size:12px}", 64);
                          oalloc("body{color:black;font-size:16px}", 64);
-                         oalloc("body{color:black;font-size:20px}", 64)], 40));
+                         oalloc("body{color:black;font-size:20px}", 64)], 32));
     ("/about",   oalloc([oalloc("body{color:navy;font-size:12px}", 64);
                          oalloc("body{color:navy;font-size:16px}", 64);
-                         oalloc("body{color:navy;font-size:20px}", 64)], 40));
+                         oalloc("body{color:navy;font-size:20px}", 64)], 32));
     ("/contact", oalloc([oalloc("body{color:green;font-size:12px}", 64);
                          oalloc("body{color:green;font-size:16px}", 64);
-                         oalloc("body{color:green;font-size:20px}", 64)], 40))
+                         oalloc("body{color:green;font-size:20px}", 64)], 32))
 ]);
 
-var url          : string@{H} = "";
 var mq           : int@{H} = 0;
-var html_path    : path(string@{H})[64]@{H} = onil(64);
-var css_arr_path : path(path(string@{H})[64]@{H}[]@{H})[40]@{H} = onil(40);
-var css_arr      : err(path(string@{H})[64]@{H}[])@{H} = [onil(64)];
-var css_path     : err(path(string@{H})[64])@{H} = onil(64);
+var url          : string@{H} = "";
+
+var html_path    : ptr[64](string@{H})@{H} = onil;
+
+var css_arr_path : ptr[32](ptr[64](string@{H})@{H}[]@{H})@{H} = onil;
+var css_arr      : err(ptr[64](string@{H})@{H}[])@{H} = [onil];
+var css_path     : err(ptr[64](string@{H}))@{H} = onil;
 
 REQUEST@{} (req : (int@{H} * string@{H})@{H}) {
     mq           = fst req;

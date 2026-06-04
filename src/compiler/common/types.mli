@@ -7,7 +7,7 @@ type basetype =
   | PAIR of ty * ty
   | ARRAY of ty
   | POINTER of ty
-  | PATH of ty * int
+  | SPOINTER of ty * int
   | HMAP of basetype * ty
   | ANY
   | SELF of ty option ref
